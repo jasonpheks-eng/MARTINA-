@@ -168,6 +168,9 @@ export default function App() {
   const [heroConfig, setHeroConfig] = useState<HeroConfig>({
     ...DEFAULT_STUDIO_FORMAT.heroConfig,
     ...(initialCache.heroConfig || {}),
+    portraitImage: initialCache.heroConfig?.portraitImage?.trim()
+      ? initialCache.heroConfig.portraitImage
+      : DEFAULT_STUDIO_FORMAT.heroConfig.portraitImage,
   });
   const [sectionCopy, setSectionCopy] = useState<SectionCopyConfig>(
     () => migrateSectionCopy(initialCache.sectionCopy)
@@ -945,15 +948,6 @@ export default function App() {
           <div className="flex sm:hidden items-center gap-2 shrink-0">
             <button
               type="button"
-              onClick={() => document.getElementById('ultra-collection')?.scrollIntoView({ behavior: 'smooth' })}
-              className="anim-fade-up px-2.5 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider shadow-md cursor-pointer whitespace-nowrap"
-              style={{ animationDelay: '850ms', backgroundColor: themeColors.cream, color: themeColors.wine }}
-            >
-              Ultra Collection
-            </button>
-
-            <button
-              type="button"
               onClick={() => setIsDrawerOpen((prev) => !prev)}
               aria-label={isDrawerOpen ? 'Close menu' : 'Open menu'}
               aria-expanded={isDrawerOpen}
@@ -1295,7 +1289,7 @@ export default function App() {
                 );
                 const formattedPrice = formatUltraPrice(product.price);
                 const directWhatsAppUrl = `https://wa.me/265994248379?text=${encodeURIComponent(
-                  `Hi! I'd like to order the ${product.title} (${formattedPrice}) from the ULTRA Collection. Please share availability and payment/delivery details.`
+                  `Hello Hot Core Pilates! I would like to order:\n- *${product.title}* (${formattedPrice})\n• Description: ${product.description || 'Professional grade oral wellness tool'}\n• Price: ${formattedPrice}\nPlease share availability and payment/delivery details.`
                 )}`;
                 const openProductShowcase = () => {
                   setSelectedProduct(product);
@@ -1436,7 +1430,7 @@ export default function App() {
                 title="Studio Admin"
               >
                 <Lock size={11} />
-                <span>Admin</span>
+                <span>ULTRA</span>
               </button>
             </div>
           </div>
@@ -1645,7 +1639,7 @@ export default function App() {
         const formattedUnitPrice = formatUltraPrice(selectedProduct.price);
         const formattedOrderTotal = formatUltraPrice(orderTotal);
         const whatsappText = encodeURIComponent(
-          `Hi! I'd like to order from the ULTRA Collection:\n- ${selectedProduct.title} x${productQty} (${formattedUnitPrice} each)\nTotal: ${formattedOrderTotal}${
+          `Hello Hot Core Pilates! I would like to order:\n- *${selectedProduct.title}* x${productQty} (${formattedUnitPrice} each)\n• Description: ${selectedProduct.description || 'Professional grade oral wellness tool'}\n• Price: ${formattedUnitPrice}\n*Total: ${formattedOrderTotal}*${
             checkoutCustomer.name ? `\nName: ${checkoutCustomer.name}` : ''
           }${checkoutCustomer.contact ? `\nContact: ${checkoutCustomer.contact}` : ''}${
             checkoutCustomer.note ? `\nNote: ${checkoutCustomer.note}` : ''

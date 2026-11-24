@@ -219,7 +219,7 @@ export const BG_IMAGE_URL =
   'https://images.higgs.ai/?default=1&output=webp&url=https%3A%2F%2Fd8j0ntlcm91z4.cloudfront.net%2Fuser_38xzZboKViGWJOttwIXH07lWA1P%2Fhf_20260729_022513_486985a2-ac8c-4278-91a8-071dcd9fcaff.png&w=1280&q=85';
 
 export const PORTRAIT_IMAGE_URL =
-  'https://stone-expand-60400629.figma.site/_assets/v11/8da570354e86aa0d44ac3e4aa335a72c8e750d68.png';
+  '/assets/aistudio/Screenshot_2026-11-25_at_01.18.48_b4a6afd0.png';
 
 export const REFERENCE_IMAGE_PATH = '/public/assets/aistudio/LANDING_PAGE_IDEA_a310be9f.jpg';
 

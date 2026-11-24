@@ -1,0 +1,213 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && (
+          request.auth.token.email == 'jasonpheks@gmail.com'
+          || exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        );
+    }
+
+    // Entity Validation Blueprints
+    function isValidStudioConfig(data) {
+      return data.keys().hasAll(['heroConfig', 'sectionCopy', 'themeColors', 'qualifierBullets', 'galleryFilter', 'textAnimStyle'])
+        && data.keys().hasOnly(['heroConfig', 'sectionCopy', 'themeColors', 'qualifierBullets', 'galleryFilter', 'textAnimStyle', 'updatedAt'])
+        && data.heroConfig is map
+        && data.sectionCopy is map
+        && data.themeColors is map
+        && data.qualifierBullets is list
+        && data.qualifierBullets.size() <= 30
+        && (data.qualifierBullets.size() == 0 || (data.qualifierBullets[0] is string && data.qualifierBullets[0].size() <= 300))
+        && data.galleryFilter in ['all', 'compact', 'large', 'minimal']
+        && data.textAnimStyle in ['marquee', 'pulse', 'float', 'fadeUp', 'none']
+        && (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    function isValidStudioMedia(data, slotId) {
+      return data.keys().hasAll(['id', 'dataUrl'])
+        && data.keys().hasOnly(['id', 'dataUrl', 'updatedAt'])
+        && data.id is string
+        && data.id == slotId
+        && data.id.size() <= 64
+        && data.id.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.dataUrl is string
+        && data.dataUrl.size() <= 900000
+        && (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    function isValidBlogPost(data) {
+      return data.keys().hasAll(['id', 'title', 'excerpt', 'category'])
+        && data.keys().hasOnly([
+          'id', 'title', 'subtitle', 'excerpt', 'content', 'date', 'category',
+          'image', 'additionalImages', 'imageStyle', 'author', 'readTime', 'featured', 'status',
+          'takeaways', 'pillarId', 'pillarIcon', 'pillarMeaning'
+        ])
+        && data.id is number
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 240
+        && (!('subtitle' in data) || (data.subtitle is string && data.subtitle.size() <= 300))
+        && data.excerpt is string && data.excerpt.size() <= 1000
+        && (!('content' in data) || (data.content is string && data.content.size() <= 50000))
+        && (!('date' in data) || (data.date is string && data.date.size() <= 64))
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 100
+        && (!('image' in data) || (data.image is string && data.image.size() <= 900000))
+        && (!('additionalImages' in data) || (data.additionalImages is list && data.additionalImages.size() <= 10 && (data.additionalImages.size() == 0 || (data.additionalImages[0] is string && data.additionalImages[0].size() <= 900000))))
+        && (!('imageStyle' in data) || data.imageStyle is map)
+        && (!('author' in data) || (data.author is string && data.author.size() <= 120))
+        && (!('readTime' in data) || (data.readTime is string && data.readTime.size() <= 40))
+        && (!('featured' in data) || data.featured is bool)
+        && (!('status' in data) || data.status in ['published', 'draft'])
+        && (!('takeaways' in data) || (data.takeaways is list && data.takeaways.size() <= 20 && (data.takeaways.size() == 0 || (data.takeaways[0] is string && data.takeaways[0].size() <= 400))))
+        && (!('pillarId' in data) || (data.pillarId is string && data.pillarId.size() <= 40))
+        && (!('pillarIcon' in data) || (data.pillarIcon is string && data.pillarIcon.size() <= 40))
+        && (!('pillarMeaning' in data) || (data.pillarMeaning is string && data.pillarMeaning.size() <= 400));
+    }
+
+    function isValidGalleryItem(data) {
+      return data.keys().hasAll(['id', 'title', 'image'])
+        && data.keys().hasOnly(['id', 'title', 'subtitle', 'image', 'imageStyle', 'size', 'textPosition'])
+        && data.id is number
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && (!('subtitle' in data) || (data.subtitle is string && data.subtitle.size() <= 160))
+        && data.image is string && data.image.size() <= 900000
+        && (!('imageStyle' in data) || data.imageStyle is map)
+        && (!('size' in data) || (data.size is string && data.size.size() <= 100))
+        && (!('textPosition' in data) || (data.textPosition is string && data.textPosition.size() <= 40));
+    }
+
+    function isValidUltraProduct(data) {
+      return data.keys().hasAll(['id', 'title', 'price'])
+        && data.keys().hasOnly(['id', 'title', 'price', 'image', 'additionalImages', 'imageStyle', 'category', 'description'])
+        && data.id is number
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.price is number && data.price >= 0 && data.price <= 100000
+        && (!('image' in data) || (data.image is string && data.image.size() <= 900000))
+        && (!('additionalImages' in data) || (data.additionalImages is list && data.additionalImages.size() <= 10 && (data.additionalImages.size() == 0 || (data.additionalImages[0] is string && data.additionalImages[0].size() <= 900000))))
+        && (!('imageStyle' in data) || data.imageStyle is map)
+        && (!('category' in data) || (data.category is string && data.category.size() <= 80))
+        && (!('description' in data) || (data.description is string && data.description.size() <= 1000));
+    }
+
+    function isValidConsultationBooking(data) {
+      return data.keys().hasAll(['name', 'email', 'session'])
+        && data.keys().hasOnly(['name', 'email', 'session', 'date', 'time', 'createdAt'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.session is string && data.session.size() >= 1 && data.session.size() <= 160
+        && (!('date' in data) || (data.date is string && data.date.size() <= 40))
+        && (!('time' in data) || (data.time is string && data.time.size() <= 40));
+    }
+
+    // 1. Global Studio Configuration (public read for all devices, admin write)
+    match /config/settings {
+      allow get: if true;
+      allow create: if isAdmin() && isValidStudioConfig(incoming());
+      allow update: if isAdmin()
+        && isValidStudioConfig(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'heroConfig', 'sectionCopy', 'themeColors', 'qualifierBullets', 'galleryFilter', 'textAnimStyle', 'updatedAt'
+        ]);
+      allow delete: if isAdmin();
+    }
+
+    // 2. Hero Uploaded Media Slots (public read for all devices, admin write)
+    match /studioMedia/{slotId} {
+      allow get, list: if true;
+      allow create: if isAdmin() && isValidId(slotId) && isValidStudioMedia(incoming(), slotId);
+      allow update: if isAdmin()
+        && isValidId(slotId)
+        && isValidStudioMedia(incoming(), slotId)
+        && incoming().id == existing().id
+        && incoming().diff(existing()).affectedKeys().hasOnly(['dataUrl', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(slotId);
+    }
+
+    // 3. Blog Posts (public read for all devices, admin write)
+    match /blogPosts/{postId} {
+      allow get, list: if true;
+      allow create: if isAdmin() && isValidId(postId) && isValidBlogPost(incoming());
+      allow update: if isAdmin()
+        && isValidId(postId)
+        && isValidBlogPost(incoming())
+        && incoming().id == existing().id
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'subtitle', 'excerpt', 'content', 'date', 'category',
+          'image', 'additionalImages', 'imageStyle', 'author', 'readTime', 'featured', 'status',
+          'takeaways', 'pillarId', 'pillarIcon', 'pillarMeaning'
+        ]);
+      allow delete: if isAdmin() && isValidId(postId);
+    }
+
+    // 4. Gallery Items (public read for all devices, admin write)
+    match /galleryItems/{itemId} {
+      allow get, list: if true;
+      allow create: if isAdmin() && isValidId(itemId) && isValidGalleryItem(incoming());
+      allow update: if isAdmin()
+        && isValidId(itemId)
+        && isValidGalleryItem(incoming())
+        && incoming().id == existing().id
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'subtitle', 'image', 'imageStyle', 'size', 'textPosition'
+        ]);
+      allow delete: if isAdmin() && isValidId(itemId);
+    }
+
+    // 5. Ultra Collection Products (public read for all devices, admin write)
+    match /ultraProducts/{productId} {
+      allow get, list: if true;
+      allow create: if isAdmin() && isValidId(productId) && isValidUltraProduct(incoming());
+      allow update: if isAdmin()
+        && isValidId(productId)
+        && isValidUltraProduct(incoming())
+        && incoming().id == existing().id
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'price', 'image', 'additionalImages', 'imageStyle', 'category', 'description'
+        ]);
+      allow delete: if isAdmin() && isValidId(productId);
+    }
+
+    // 6. Consultation Bookings (public create intake, admin-only read/manage for PII isolation)
+    match /consultationBookings/{bookingId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(bookingId)
+        && isValidConsultationBooking(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(bookingId)
+        && isValidConsultationBooking(incoming())
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'session', 'date', 'time']);
+      allow delete: if isAdmin() && isValidId(bookingId);
+    }
+
+    // 7. Admin Role Membership
+    match /admins/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list, create, update, delete: if false;
+    }
+  }
+}

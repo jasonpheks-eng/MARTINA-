@@ -1,0 +1,180 @@
+{
+  "entities": {
+    "StudioConfig": {
+      "title": "Studio Configuration",
+      "description": "Global customization settings, typography, copy, styles, and palette for Hot Core Pilates",
+      "type": "object",
+      "properties": {
+        "heroConfig": {
+          "type": "object",
+          "description": "Hero section titles, marquee text, logo settings, image style configs, and media references"
+        },
+        "sectionCopy": {
+          "type": "object",
+          "description": "Editable titles, kickers, and intro subtitles across landing page sections"
+        },
+        "themeColors": {
+          "type": "object",
+          "description": "Theme color palette configuration"
+        },
+        "qualifierBullets": {
+          "type": "array",
+          "description": "Target audience list points (up to 30 items)"
+        },
+        "galleryFilter": {
+          "type": "string",
+          "enum": ["all", "compact", "large", "minimal"],
+          "description": "Active Studio Gallery grid layout format"
+        },
+        "textAnimStyle": {
+          "type": "string",
+          "enum": ["marquee", "pulse", "float", "fadeUp", "none"],
+          "description": "Active Studio Gallery text animation style"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "ISO timestamp of last update"
+        }
+      },
+      "required": ["heroConfig", "sectionCopy", "themeColors", "qualifierBullets", "galleryFilter", "textAnimStyle"]
+    },
+    "StudioMedia": {
+      "title": "Studio Media Asset",
+      "description": "Compressed uploaded image or transparent cutout asset referenced by StudioConfig",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 64,
+          "description": "Slot identifier such as hero_logo, hero_bg, or hero_portrait"
+        },
+        "dataUrl": {
+          "type": "string",
+          "maxLength": 900000,
+          "description": "Compressed base64 image data URL or asset URL"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64,
+          "description": "ISO timestamp of last upload"
+        }
+      },
+      "required": ["id", "dataUrl"]
+    },
+    "BlogPost": {
+      "title": "Blog Post",
+      "description": "Journal article published on Hot Core Pilates site",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number", "description": "Unique post identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 240, "description": "Article title" },
+        "subtitle": { "type": "string", "maxLength": 300, "description": "Article subtitle or kicker" },
+        "excerpt": { "type": "string", "maxLength": 1000, "description": "Short article excerpt" },
+        "content": { "type": "string", "maxLength": 50000, "description": "Full article body text" },
+        "date": { "type": "string", "maxLength": 64, "description": "Publication date string" },
+        "category": { "type": "string", "minLength": 1, "maxLength": 100, "description": "Article category" },
+        "image": { "type": "string", "maxLength": 900000, "description": "Article image URL or compressed data URI" },
+        "additionalImages": { "type": "array", "description": "Up to 10 additional article photo URLs or studioMedia references" },
+        "imageStyle": { "type": "object", "description": "Image positioning, flip, scale, background, and blend settings" },
+        "author": { "type": "string", "maxLength": 120, "description": "Article author name" },
+        "readTime": { "type": "string", "maxLength": 40, "description": "Estimated read time label" },
+        "featured": { "type": "boolean", "description": "Whether article is spotlighted as featured" },
+        "status": { "type": "string", "enum": ["published", "draft"], "description": "Publication visibility state" },
+        "takeaways": { "type": "array", "description": "Key takeaways list for the article" },
+        "pillarId": { "type": "string", "maxLength": 40, "description": "Linked Wellness Pillar ID" },
+        "pillarIcon": { "type": "string", "maxLength": 40, "description": "Selected icon name illustrated by the article" },
+        "pillarMeaning": { "type": "string", "maxLength": 400, "description": "Pillar meaning or icon elaboration description" }
+      },
+      "required": ["id", "title", "excerpt", "category"]
+    },
+    "GalleryItem": {
+      "title": "Gallery Item",
+      "description": "Studio visual atmosphere gallery tile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number", "description": "Tile identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160, "description": "Overlapping tile title" },
+        "subtitle": { "type": "string", "maxLength": 160, "description": "Subtitle tag" },
+        "image": { "type": "string", "maxLength": 900000, "description": "Tile image URL or compressed data URI" },
+        "imageStyle": { "type": "object", "description": "Tile image scale, offset, flip, background, and blend settings" },
+        "size": { "type": "string", "maxLength": 100, "description": "Grid tile span class" },
+        "textPosition": { "type": "string", "maxLength": 40, "description": "Text alignment position" }
+      },
+      "required": ["id", "title", "image"]
+    },
+    "UltraProduct": {
+      "title": "Ultra Collection Product",
+      "description": "Boutique studio gear item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number", "description": "Product identifier" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160, "description": "Product title" },
+        "price": { "type": "number", "description": "Product price in USD" },
+        "image": { "type": "string", "maxLength": 900000, "description": "Product image URL or compressed data URI" },
+        "additionalImages": { "type": "array", "description": "Up to 10 additional product upload URLs or studioMedia references" },
+        "imageStyle": { "type": "object", "description": "Product image scale, offset, flip, background, and blend settings" },
+        "category": { "type": "string", "maxLength": 80, "description": "Gear category" },
+        "description": { "type": "string", "maxLength": 1000, "description": "Short product description shown in showcase and checkout modal" }
+      },
+      "required": ["id", "title", "price"]
+    },
+    "ConsultationBooking": {
+      "title": "1:1 Consultation Booking",
+      "description": "Client intake booking reservation containing client PII",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 120, "description": "Client full name" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 200, "description": "Client email" },
+        "session": { "type": "string", "minLength": 1, "maxLength": 160, "description": "Selected session package" },
+        "date": { "type": "string", "maxLength": 40, "description": "Requested date" },
+        "time": { "type": "string", "maxLength": 40, "description": "Requested time" },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64, "description": "Booking creation timestamp" }
+      },
+      "required": ["name", "email", "session"]
+    },
+    "AdminUser": {
+      "title": "Admin User Role",
+      "description": "Optional Firestore admin role allowlist document keyed by UID",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 200, "description": "Verified admin email" },
+        "role": { "type": "string", "enum": ["admin"], "description": "Admin role marker" }
+      },
+      "required": ["role"]
+    }
+  },
+  "firestore": {
+    "/config/settings": {
+      "schema": "StudioConfig",
+      "description": "Publicly readable global studio settings document; admin writable"
+    },
+    "/studioMedia/{slotId}": {
+      "schema": "StudioMedia",
+      "description": "Publicly readable hero uploaded media assets; admin writable"
+    },
+    "/blogPosts/{postId}": {
+      "schema": "BlogPost",
+      "description": "Publicly readable collection of journal blog posts; admin writable"
+    },
+    "/galleryItems/{itemId}": {
+      "schema": "GalleryItem",
+      "description": "Publicly readable collection of studio picture gallery tiles; admin writable"
+    },
+    "/ultraProducts/{productId}": {
+      "schema": "UltraProduct",
+      "description": "Publicly readable collection of Ultra Collection boutique gear items; admin writable"
+    },
+    "/consultationBookings/{bookingId}": {
+      "schema": "ConsultationBooking",
+      "description": "Client 1:1 consultation bookings; public create, admin read/manage"
+    },
+    "/admins/{userId}": {
+      "schema": "AdminUser",
+      "description": "Admin role membership documents"
+    }
+  }
+}

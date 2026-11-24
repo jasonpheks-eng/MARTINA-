@@ -35,6 +35,14 @@ import {
   LogOut,
   AlertCircle,
   Lock,
+  ShieldCheck,
+  ExternalLink,
+  RefreshCw,
+  CheckCircle,
+  Server,
+  Globe,
+  Key,
+  AlertTriangle,
 } from 'lucide-react';
 import { doc, collection, onSnapshot } from 'firebase/firestore';
 import type { User as FirebaseUser } from 'firebase/auth';
@@ -54,6 +62,13 @@ import {
   saveGalleryItemsToFirebase,
   saveUltraProductsToFirebase,
   saveBookingToFirebase,
+  firebaseConfig,
+  FIREBASE_CONSOLE_URLS,
+  VERCEL_ENV_CONFIG_SNIPPET,
+  formatFirebaseError,
+  runFirebaseDiagnostics,
+  type FormattedFirebaseError,
+  type FirebaseDiagnosticReport,
 } from './AppletFirebase';
 import {
   DEFAULT_SECTION_COPY,
@@ -310,9 +325,14 @@ export default function App() {
 
   // Admin Modal & Staging Draft States
   const [isAdminOpen, setIsAdminOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState<'hero' | 'copy' | 'blog' | 'gallery' | 'products' | 'colors' | 'code'>('hero');
+  const [adminTab, setAdminTab] = useState<'hero' | 'copy' | 'blog' | 'gallery' | 'products' | 'colors' | 'code' | 'firebase'>('hero');
   const [saveToast, setSaveToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
+  const [authErrorDetail, setAuthErrorDetail] = useState<FormattedFirebaseError | null>(null);
+  const [diagnosticReport, setDiagnosticReport] = useState<FirebaseDiagnosticReport | null>(null);
+  const [isRunningDiagnostic, setIsRunningDiagnostic] = useState(false);
+  const [envCopied, setEnvCopied] = useState(false);
+  const [domainCopied, setDomainCopied] = useState(false);
   const [bgRemoverTarget, setBgRemoverTarget] = useState<{
     image: string;
     label: string;
@@ -545,25 +565,26 @@ export default function App() {
     };
   }, []);
 
-  const formatCloudError = (err: unknown): string => {
-    let readable = err instanceof Error ? err.message : 'Unable to reach Firebase.';
+  const handleRunDiagnostics = async () => {
+    setIsRunningDiagnostic(true);
     try {
-      const parsed = JSON.parse(readable);
-      if (parsed?.error) readable = parsed.error;
-    } catch {
-      // Plain error message
+      const report = await runFirebaseDiagnostics();
+      setDiagnosticReport(report);
+      if (report.firestoreConnected) {
+        showToast('success', `Firebase is reachable! Latency: ${report.firestoreLatencyMs}ms`);
+      } else {
+        showToast('error', `Firestore test failed: ${report.firestoreMessage}`);
+      }
+    } catch (err) {
+      showToast('error', `Diagnostics failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsRunningDiagnostic(false);
     }
-    if (readable.includes('auth/unauthorized-domain')) {
-      return `Add "${window.location.hostname}" to Firebase Console → Authentication → Settings → Authorized domains.`;
-    }
-    if (readable.includes('auth/popup-blocked')) {
-      return 'Browser blocked the Google Sign-In popup. Please allow popups for this site and retry.';
-    }
-    return readable;
   };
 
   const handleAdminSignIn = async () => {
     try {
+      setAuthErrorDetail(null);
       const res = await signInAdminWithGoogle();
       setAdminUser(res.user);
       setIsAdminVerified(res.isAdmin);
@@ -578,7 +599,9 @@ export default function App() {
       }
       return res.isAdmin;
     } catch (err) {
-      showToast('error', `Admin Sign-In failed: ${formatCloudError(err)}`, 6000);
+      const formatted = formatFirebaseError(err);
+      setAuthErrorDetail(formatted);
+      showToast('error', `Admin Sign-In: ${formatted.actionableStep}`, 7000);
       return false;
     }
   };
@@ -591,15 +614,22 @@ export default function App() {
     try {
       // Require verified admin sign-in (triggered directly from user click so popup opens reliably)
       if (!adminUser || !isAdminVerified) {
-        const authRes = await signInAdminWithGoogle();
-        setAdminUser(authRes.user);
-        setIsAdminVerified(authRes.isAdmin);
-        if (!authRes.isAdmin) {
-          showToast(
-            'error',
-            `Signed in as ${authRes.user.email || 'user'}, but cloud saves require studio admin (${ADMIN_EMAIL}).`,
-            5500
-          );
+        try {
+          const authRes = await signInAdminWithGoogle();
+          setAdminUser(authRes.user);
+          setIsAdminVerified(authRes.isAdmin);
+          if (!authRes.isAdmin) {
+            showToast(
+              'error',
+              `Signed in as ${authRes.user.email || 'user'}, but cloud saves require studio admin (${ADMIN_EMAIL}).`,
+              5500
+            );
+            return false;
+          }
+        } catch (authErr) {
+          const formatted = formatFirebaseError(authErr);
+          setAuthErrorDetail(formatted);
+          showToast('error', `Sign-In Required: ${formatted.actionableStep}`, 7000);
           return false;
         }
       }
@@ -658,10 +688,12 @@ export default function App() {
       const message = specificTabName
         ? `Saved & synced ${specificTabName} to Firestore!`
         : 'All Admin Studio changes saved & synced to Firestore!';
-      showToast('success', message);
+      setAuthErrorDetail(null);
       return true;
     } catch (err) {
-      showToast('error', `Firestore Save Failed: ${formatCloudError(err)}`, 6500);
+      const formatted = formatFirebaseError(err);
+      setAuthErrorDetail(formatted);
+      showToast('error', `Firestore Save Failed: ${formatted.actionableStep}`, 7000);
       return false;
     } finally {
       setIsSavingCloud(false);
@@ -682,6 +714,12 @@ export default function App() {
   useEffect(() => {
     document.title = 'Marcus — Bennet & Hot Core Pilates';
   }, []);
+
+  useEffect(() => {
+    if (adminTab === 'firebase' && !diagnosticReport && !isRunningDiagnostic) {
+      void handleRunDiagnostics();
+    }
+  }, [adminTab]);
 
   const handleOpenBooking = (sessionName?: string) => {
     if (sessionName) {
@@ -1931,6 +1969,7 @@ export default function App() {
                 { id: 'products', label: 'Ultra Collection', icon: ShoppingBag },
                 { id: 'colors', label: 'Theme Colors', icon: Palette },
                 { id: 'code', label: 'Format Code', icon: Code2 },
+                { id: 'firebase', label: 'Firebase & Auth', icon: ShieldCheck },
               ].map((tab) => {
                 const Icon = tab.icon;
                 return (
@@ -1950,6 +1989,74 @@ export default function App() {
 
             {/* Tab Body */}
             <div className="p-4 sm:p-8 overflow-y-auto flex-1 space-y-5 sm:space-y-6">
+              {/* Contextual Auth / Domain Error Callout */}
+              {authErrorDetail && (
+                <div className="p-4 sm:p-5 rounded-2xl bg-amber-950/40 border border-amber-500/40 text-amber-200 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <AlertTriangle className="text-amber-400 shrink-0" size={18} />
+                      <div>
+                        <h4 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-amber-300">
+                          {authErrorDetail.title}
+                        </h4>
+                        <p className="text-[11px] sm:text-xs text-amber-200/90 mt-0.5">
+                          {authErrorDetail.description}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setAuthErrorDetail(null)}
+                      className="p-1 rounded-lg text-amber-400/70 hover:text-amber-200 hover:bg-amber-900/40 cursor-pointer"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-black/40 border border-amber-500/20 text-xs text-amber-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="font-mono text-[11px] text-amber-300/90">
+                      <span className="text-white/60">Required Action: </span>
+                      {authErrorDetail.actionableStep}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {authErrorDetail.targetDomain && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(authErrorDetail.targetDomain || '');
+                              setDomainCopied(true);
+                              setTimeout(() => setDomainCopied(false), 2000);
+                            } catch {
+                              // Ignore
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer"
+                        >
+                          {domainCopied ? <Check size={12} className="text-[#25D366]" /> : <Copy size={12} />}
+                          <span>{domainCopied ? 'Copied Domain' : 'Copy Domain'}</span>
+                        </button>
+                      )}
+                      {authErrorDetail.actionUrl && (
+                        <a
+                          href={authErrorDetail.actionUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 rounded-lg bg-amber-400 text-black hover:bg-amber-300 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>Open Firebase</span>
+                          <ExternalLink size={11} />
+                        </a>
+                      )}
+                      <button
+                        onClick={() => setAdminTab('firebase')}
+                        className="px-3 py-1.5 rounded-lg bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 text-[10px] font-bold uppercase tracking-wider cursor-pointer"
+                      >
+                        Diagnostic Hub
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* TAB 1: HERO VISUALS */}
               {adminTab === 'hero' && (
                 <div className="space-y-6">
@@ -3305,6 +3412,262 @@ export default function App() {
                   </div>
                 );
               })()}
+
+              {/* TAB 8: FIREBASE & AUTHENTICATION DIAGNOSTIC CENTER */}
+              {adminTab === 'firebase' && (
+                <div className="space-y-6">
+                  {/* Top Diagnostic Header & Trigger */}
+                  <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-r from-black/80 via-[#202020] to-[#151515] border border-white/15 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#ebd2d8]">
+                          <ShieldCheck size={16} />
+                          <span>Firebase & Auth Diagnostic Center</span>
+                        </div>
+                        <h4 className="text-base sm:text-lg font-bold text-white">
+                          Live Health Check & Domain Configuration
+                        </h4>
+                        <p className="text-xs text-white/70 max-w-2xl leading-relaxed">
+                          Verify Firestore database connectivity, troubleshoot domain authorization for Vercel/custom hosting, verify the Google sign-in provider, and export verified environment variables.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          disabled={isRunningDiagnostic}
+                          onClick={() => void handleRunDiagnostics()}
+                          className="px-4 py-2.5 rounded-xl bg-[#ebd2d8] text-[#3d111e] hover:bg-[#efeee9] text-xs font-bold uppercase tracking-wider flex items-center gap-2 cursor-pointer shadow-lg transition-all disabled:opacity-60"
+                        >
+                          <RefreshCw size={14} className={isRunningDiagnostic ? 'animate-spin' : ''} />
+                          <span>{isRunningDiagnostic ? 'Testing Connection...' : 'Run Diagnostics'}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Diagnostic Summary Bar */}
+                    {diagnosticReport && (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-white/10">
+                        <div className="p-3 rounded-xl bg-black/40 border border-white/10 flex items-center gap-3">
+                          <Server className={diagnosticReport.firestoreConnected ? 'text-[#25D366]' : 'text-red-400'} size={20} />
+                          <div>
+                            <div className="text-[10px] uppercase font-bold text-white/50">Firestore DB</div>
+                            <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+                              <span>{diagnosticReport.firestoreConnected ? 'Connected' : 'Offline / Error'}</span>
+                              {diagnosticReport.firestoreConnected && (
+                                <span className="text-[10px] text-[#25D366] font-mono">({diagnosticReport.firestoreLatencyMs}ms)</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="p-3 rounded-xl bg-black/40 border border-white/10 flex items-center gap-3">
+                          <Globe className={diagnosticReport.domainAuthorizedStatus === 'authorized_by_default' ? 'text-[#25D366]' : 'text-amber-400'} size={20} />
+                          <div>
+                            <div className="text-[10px] uppercase font-bold text-white/50">Current Domain</div>
+                            <div className="text-xs font-semibold text-white truncate max-w-[180px]">
+                              {diagnosticReport.currentHostname}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="p-3 rounded-xl bg-black/40 border border-white/10 flex items-center gap-3">
+                          <User className={diagnosticReport.isAdmin ? 'text-[#25D366]' : 'text-amber-400'} size={20} />
+                          <div>
+                            <div className="text-[10px] uppercase font-bold text-white/50">Admin Session</div>
+                            <div className="text-xs font-semibold text-white truncate max-w-[180px]">
+                              {diagnosticReport.currentUserEmail || 'Not Signed In'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* SECTION 1: DOMAIN AUTHORIZATION HELPER (Fixes auth/unauthorized-domain) */}
+                  <div className="p-5 rounded-2xl bg-black/50 border border-white/15 space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#ebd2d8]">
+                          <Globe size={15} />
+                          <span>1. Authorized Domains Setup (Fixes "auth/unauthorized-domain")</span>
+                        </div>
+                        <p className="text-xs text-white/70 mt-1 leading-relaxed">
+                          Firebase Authentication strictly blocks Google Sign-In popups on any domain that is not registered in your project's Authorized domains list.
+                        </p>
+                      </div>
+                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider shrink-0 ${
+                        typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.endsWith('.firebaseapp.com'))
+                          ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                          : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      }`}>
+                        {typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.endsWith('.firebaseapp.com'))
+                          ? 'Localhost / Default'
+                          : 'Live / Custom Domain'}
+                      </span>
+                    </div>
+
+                    <div className="p-3.5 rounded-xl bg-[#181818] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <span className="text-[10px] uppercase tracking-wider text-white/50 block font-bold">Detected Hostname</span>
+                        <code className="text-sm font-mono text-[#ebd2d8] font-bold">
+                          {typeof window !== 'undefined' ? window.location.hostname : 'localhost'}
+                        </code>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(typeof window !== 'undefined' ? window.location.hostname : '');
+                              setDomainCopied(true);
+                              setTimeout(() => setDomainCopied(false), 2000);
+                            } catch {
+                              // Ignore
+                            }
+                          }}
+                          className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer"
+                        >
+                          {domainCopied ? <Check size={14} className="text-[#25D366]" /> : <Copy size={14} />}
+                          <span>{domainCopied ? 'Copied Hostname' : 'Copy Hostname'}</span>
+                        </button>
+                        <a
+                          href={FIREBASE_CONSOLE_URLS.authorizedDomains}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-4 py-2 rounded-xl bg-[#ebd2d8] text-[#3d111e] hover:bg-[#efeee9] text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer shadow-md"
+                        >
+                          <span>Open Authorized Domains</span>
+                          <ExternalLink size={13} />
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-white/60 space-y-1.5 pl-2 border-l-2 border-[#ebd2d8]/40">
+                      <p className="font-semibold text-white/80">3-Step Resolution for Vercel or Custom Domains:</p>
+                      <ol className="list-decimal list-inside space-y-1 text-white/70">
+                        <li>Click <strong>Copy Hostname</strong> above to copy your domain.</li>
+                        <li>Click <strong>Open Authorized Domains</strong> to go directly to <em>Firebase Console → Authentication → Settings</em>.</li>
+                        <li>Under <em>Authorized domains</em>, click <strong>Add domain</strong>, paste the copied hostname (without <code>https://</code> or trailing slashes), and click <strong>Save</strong>.</li>
+                      </ol>
+                    </div>
+                  </div>
+
+                  {/* SECTION 2: GOOGLE SIGN-IN PROVIDER VERIFICATION (Fixes auth/operation-not-allowed) */}
+                  <div className="p-5 rounded-2xl bg-black/50 border border-white/15 space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#ebd2d8]">
+                          <Key size={15} />
+                          <span>2. Google Sign-In Provider (Fixes "auth/operation-not-allowed")</span>
+                        </div>
+                        <p className="text-xs text-white/70 mt-1 leading-relaxed">
+                          In Firebase Authentication, Google must be enabled as a sign-in provider with a project support email set.
+                        </p>
+                      </div>
+                      <a
+                        href={FIREBASE_CONSOLE_URLS.signInProviders}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer shrink-0"
+                      >
+                        <span>Open Sign-In Methods</span>
+                        <ExternalLink size={12} />
+                      </a>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="p-3.5 rounded-xl bg-[#181818] border border-white/10 space-y-1.5">
+                        <span className="text-[10px] uppercase font-bold text-white/50 block">Authorized Studio Admin Email</span>
+                        <div className="text-sm font-mono text-[#ebd2d8] font-bold">{ADMIN_EMAIL}</div>
+                        <p className="text-[11px] text-white/60">
+                          Firestore rules grant write permissions exclusively to this email or verified admins.
+                        </p>
+                      </div>
+
+                      <div className="p-3.5 rounded-xl bg-[#181818] border border-white/10 space-y-2">
+                        <span className="text-[10px] uppercase font-bold text-white/50 block">Current Google Authentication</span>
+                        {adminUser ? (
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <div className="text-xs font-bold text-white truncate">{adminUser.email}</div>
+                              <span className={`text-[10px] font-bold uppercase tracking-wider ${isAdminVerified ? 'text-[#25D366]' : 'text-amber-400'}`}>
+                                {isAdminVerified ? 'Verified Studio Admin ✓' : 'Unprivileged User Account'}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void signOutAdmin()}
+                              className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-[10px] font-bold uppercase tracking-wider cursor-pointer"
+                            >
+                              Sign Out
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs text-white/50 italic">No admin signed in</span>
+                            <button
+                              type="button"
+                              onClick={() => void handleAdminSignIn()}
+                              className="px-3.5 py-1.5 rounded-lg bg-[#ebd2d8] text-[#3d111e] hover:bg-[#efeee9] text-[10px] font-bold uppercase tracking-wider cursor-pointer shadow"
+                            >
+                              Sign In with Google
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-white/60 space-y-1.5 pl-2 border-l-2 border-[#ebd2d8]/40">
+                      <p className="font-semibold text-white/80">How to Enable Google Provider:</p>
+                      <ol className="list-decimal list-inside space-y-1 text-white/70">
+                        <li>Go to <em>Firebase Console → Authentication → Sign-in method</em>.</li>
+                        <li>Click <strong>Google</strong> in the provider list.</li>
+                        <li>Switch <strong>Enable</strong> toggle to ON.</li>
+                        <li>Select <code>{ADMIN_EMAIL}</code> as Project support email and click <strong>Save</strong>.</li>
+                      </ol>
+                    </div>
+                  </div>
+
+                  {/* SECTION 3: VERCEL ENVIRONMENT VARIABLES */}
+                  <div className="p-5 rounded-2xl bg-black/50 border border-white/15 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#ebd2d8]">
+                          <Server size={15} />
+                          <span>3. Vercel & Production Environment Variables</span>
+                        </div>
+                        <p className="text-xs text-white/70 mt-1 leading-relaxed">
+                          If your git repository contains <code>firebase-applet-config.json</code>, Vercel bundles it automatically without extra environment variables. If you configure env vars in Vercel, they must match these exact keys:
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(VERCEL_ENV_CONFIG_SNIPPET);
+                            setEnvCopied(true);
+                            setTimeout(() => setEnvCopied(false), 2000);
+                          } catch {
+                            // Ignore
+                          }
+                        }}
+                        className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer shrink-0"
+                      >
+                        {envCopied ? <Check size={14} className="text-[#25D366]" /> : <Copy size={14} />}
+                        <span>{envCopied ? 'Copied Env Vars' : 'Copy All 7 Env Vars'}</span>
+                      </button>
+                    </div>
+
+                    <pre className="p-4 rounded-xl bg-black border border-white/10 font-mono text-[11px] sm:text-xs text-[#ebd2d8] leading-relaxed overflow-x-auto">
+                      {VERCEL_ENV_CONFIG_SNIPPET}
+                    </pre>
+
+                    <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200/90 leading-relaxed">
+                      <strong>Critical Note on Database ID:</strong> Do not set <code>VITE_FIREBASE_DATABASE_ID</code> to <code>(default)</code> in Vercel. This project uses the named database <code>{firebaseConfig.firestoreDatabaseId}</code>.
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Modal Footer */}

@@ -31,22 +31,28 @@ import type {
   UltraProduct,
 } from './studioFormat';
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || firebaseJsonConfig.apiKey,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseJsonConfig.authDomain,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseJsonConfig.projectId,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseJsonConfig.storageBucket,
-  messagingSenderId:
-    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseJsonConfig.messagingSenderId,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || firebaseJsonConfig.appId,
-  firestoreDatabaseId:
-    import.meta.env.VITE_FIREBASE_DATABASE_ID || firebaseJsonConfig.firestoreDatabaseId,
+const rawEnvDatabaseId = import.meta.env.VITE_FIREBASE_DATABASE_ID?.trim();
+const resolvedDatabaseId =
+  rawEnvDatabaseId && rawEnvDatabaseId !== '(default)' && rawEnvDatabaseId !== 'default'
+    ? rawEnvDatabaseId
+    : (firebaseJsonConfig.firestoreDatabaseId || '(default)');
+
+export const firebaseConfig = {
+  apiKey: (import.meta.env.VITE_FIREBASE_API_KEY || firebaseJsonConfig.apiKey || '').trim(),
+  authDomain: (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || firebaseJsonConfig.authDomain || '').trim(),
+  projectId: (import.meta.env.VITE_FIREBASE_PROJECT_ID || firebaseJsonConfig.projectId || '').trim(),
+  storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || firebaseJsonConfig.storageBucket || '').trim(),
+  messagingSenderId: (
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseJsonConfig.messagingSenderId || ''
+  ).trim(),
+  appId: (import.meta.env.VITE_FIREBASE_APP_ID || firebaseJsonConfig.appId || '').trim(),
+  firestoreDatabaseId: resolvedDatabaseId,
 };
 
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
-// CRITICAL: Initialize Firestore using firestoreDatabaseId from configuration
+// CRITICAL: Initialize Firestore using resolved firestoreDatabaseId from configuration
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
@@ -120,9 +126,218 @@ async function testConnection() {
 }
 void testConnection();
 
+export const FIREBASE_CONSOLE_URLS = {
+  authorizedDomains: `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`,
+  signInProviders: `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/providers`,
+  firestoreData: `https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/data`,
+  projectSettings: `https://console.firebase.google.com/project/${firebaseConfig.projectId}/settings/general`,
+};
+
+export const VERCEL_ENV_CONFIG_SNIPPET = `VITE_FIREBASE_API_KEY=${firebaseConfig.apiKey}
+VITE_FIREBASE_AUTH_DOMAIN=${firebaseConfig.authDomain}
+VITE_FIREBASE_PROJECT_ID=${firebaseConfig.projectId}
+VITE_FIREBASE_STORAGE_BUCKET=${firebaseConfig.storageBucket}
+VITE_FIREBASE_MESSAGING_SENDER_ID=${firebaseConfig.messagingSenderId}
+VITE_FIREBASE_APP_ID=${firebaseConfig.appId}
+VITE_FIREBASE_DATABASE_ID=${firebaseConfig.firestoreDatabaseId}`;
+
+export interface FormattedFirebaseError {
+  rawMessage: string;
+  code: string;
+  title: string;
+  description: string;
+  actionableStep: string;
+  actionUrl?: string;
+  targetDomain?: string;
+}
+
+export function formatFirebaseError(err: unknown): FormattedFirebaseError {
+  let raw = err instanceof Error ? err.message : String(err);
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+      raw = String(parsed.error);
+    }
+  } catch {
+    // plain string
+  }
+
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+
+  if (raw.includes('auth/unauthorized-domain')) {
+    return {
+      rawMessage: raw,
+      code: 'auth/unauthorized-domain',
+      title: 'Domain Not Authorized in Firebase',
+      description: `Firebase Authentication does not allow sign-in from "${hostname}" until it is added to your project's Authorized domains list.`,
+      actionableStep: `Open Firebase Console → Authentication → Settings → Authorized domains, click "Add domain", and enter "${hostname}".`,
+      actionUrl: FIREBASE_CONSOLE_URLS.authorizedDomains,
+      targetDomain: hostname,
+    };
+  }
+
+  if (raw.includes('auth/operation-not-allowed')) {
+    return {
+      rawMessage: raw,
+      code: 'auth/operation-not-allowed',
+      title: 'Google Sign-In Provider Disabled',
+      description: 'The Google Sign-In method is not currently enabled in your Firebase Authentication project.',
+      actionableStep: `Go to Firebase Console → Authentication → Sign-in method, click Google, toggle Enable, select "${ADMIN_EMAIL}" as support email, and save.`,
+      actionUrl: FIREBASE_CONSOLE_URLS.signInProviders,
+    };
+  }
+
+  if (raw.includes('auth/popup-blocked')) {
+    return {
+      rawMessage: raw,
+      code: 'auth/popup-blocked',
+      title: 'Sign-In Popup Blocked',
+      description: 'Your web browser prevented the Google Sign-In popup window from opening.',
+      actionableStep: 'Click the popup blocker icon in your browser address bar, select "Always allow popups from this site", and retry.',
+    };
+  }
+
+  if (raw.includes('auth/popup-closed-by-user')) {
+    return {
+      rawMessage: raw,
+      code: 'auth/popup-closed-by-user',
+      title: 'Sign-In Cancelled',
+      description: 'The sign-in popup was closed before Google authentication could complete.',
+      actionableStep: 'Click "Sign in with Google" again and select your account to proceed.',
+    };
+  }
+
+  if (raw.includes('auth/invalid-api-key') || raw.includes('API key not valid')) {
+    return {
+      rawMessage: raw,
+      code: 'auth/invalid-api-key',
+      title: 'Invalid Firebase API Key',
+      description: 'The Firebase API key supplied in your environment variables does not match the project.',
+      actionableStep: `Ensure VITE_FIREBASE_API_KEY is set to "${firebaseConfig.apiKey}".`,
+      actionUrl: FIREBASE_CONSOLE_URLS.projectSettings,
+    };
+  }
+
+  if (raw.includes('permission-denied') || raw.includes('Missing or insufficient permissions')) {
+    return {
+      rawMessage: raw,
+      code: 'permission-denied',
+      title: 'Admin Permission Denied',
+      description: 'Firestore security rules require administrative privileges to write studio updates.',
+      actionableStep: `Make sure you are signed in with the authorized studio admin account: ${ADMIN_EMAIL}.`,
+    };
+  }
+
+  if (raw.includes('the client is offline') || raw.includes('unavailable')) {
+    return {
+      rawMessage: raw,
+      code: 'unavailable',
+      title: 'Firebase Connection Offline',
+      description: 'Unable to reach the Firestore database servers or network is unavailable.',
+      actionableStep: 'Check internet connectivity and verify that your Vercel deployment has access to Firebase.',
+    };
+  }
+
+  return {
+    rawMessage: raw,
+    code: 'unknown_error',
+    title: 'Firebase Authentication Notice',
+    description: raw,
+    actionableStep: 'Verify your Firebase Console settings and Vercel environment variables.',
+    actionUrl: FIREBASE_CONSOLE_URLS.projectSettings,
+  };
+}
+
+export interface FirebaseDiagnosticReport {
+  timestamp: string;
+  projectId: string;
+  databaseId: string;
+  authDomain: string;
+  currentHostname: string;
+  isLocalhost: boolean;
+  isFirebaseDefaultDomain: boolean;
+  isVercelDomain: boolean;
+  domainAuthorizedStatus: 'authorized_by_default' | 'requires_firebase_console_addition';
+  firestoreConnected: boolean;
+  firestoreLatencyMs: number;
+  firestoreMessage: string;
+  authReady: boolean;
+  currentUserEmail: string | null;
+  isAdmin: boolean;
+  consoleUrls: typeof FIREBASE_CONSOLE_URLS;
+  vercelEnvSnippet: string;
+}
+
+export async function runFirebaseDiagnostics(): Promise<FirebaseDiagnosticReport> {
+  const currentHostname = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+  const isLocalhost =
+    currentHostname === 'localhost' ||
+    currentHostname === '127.0.0.1' ||
+    currentHostname === '0.0.0.0' ||
+    currentHostname.endsWith('.local');
+  const isFirebaseDefaultDomain =
+    currentHostname === firebaseConfig.authDomain ||
+    currentHostname.endsWith('.firebaseapp.com') ||
+    currentHostname.endsWith('.web.app');
+  const isVercelDomain = currentHostname.endsWith('.vercel.app');
+
+  const domainAuthorizedStatus =
+    isLocalhost || isFirebaseDefaultDomain
+      ? 'authorized_by_default'
+      : 'requires_firebase_console_addition';
+
+  const startTime = Date.now();
+  let firestoreConnected = false;
+  let firestoreMessage = '';
+
+  try {
+    // Attempt a direct server read of config/settings (which is public-readable in firestore.rules)
+    const testDoc = await getDocFromServer(doc(db, 'config', 'settings'));
+    firestoreConnected = true;
+    firestoreMessage = testDoc.exists()
+      ? 'Firestore database reachable & config document loaded successfully.'
+      : 'Firestore database reachable (initial config placeholder active).';
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('Missing or insufficient permissions') || msg.includes('permission-denied')) {
+      // If rules deny read, the database is still reachable and communicating with Firebase
+      firestoreConnected = true;
+      firestoreMessage = 'Firestore server reachable (validated by security rules).';
+    } else {
+      firestoreConnected = false;
+      firestoreMessage = `Firestore connection error: ${msg}`;
+    }
+  }
+
+  const firestoreLatencyMs = Date.now() - startTime;
+  const currentUser = auth.currentUser;
+  const isAdmin = await checkUserIsAdmin(currentUser);
+
+  return {
+    timestamp: new Date().toLocaleTimeString(),
+    projectId: firebaseConfig.projectId,
+    databaseId: firebaseConfig.firestoreDatabaseId,
+    authDomain: firebaseConfig.authDomain,
+    currentHostname,
+    isLocalhost,
+    isFirebaseDefaultDomain,
+    isVercelDomain,
+    domainAuthorizedStatus,
+    firestoreConnected,
+    firestoreLatencyMs,
+    firestoreMessage,
+    authReady: true,
+    currentUserEmail: currentUser?.email || null,
+    isAdmin,
+    consoleUrls: FIREBASE_CONSOLE_URLS,
+    vercelEnvSnippet: VERCEL_ENV_CONFIG_SNIPPET,
+  };
+}
+
 export async function checkUserIsAdmin(user: User | null): Promise<boolean> {
-  if (!user || !user.emailVerified) return false;
-  if (user.email?.toLowerCase() === ADMIN_EMAIL) return true;
+  if (!user) return false;
+  const userEmail = (user.email || user.providerData?.[0]?.email || '').trim().toLowerCase();
+  if (userEmail === ADMIN_EMAIL.trim().toLowerCase()) return true;
   try {
     const adminSnap = await getDoc(doc(db, 'admins', user.uid));
     return adminSnap.exists();

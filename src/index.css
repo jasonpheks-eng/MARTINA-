@@ -150,6 +150,11 @@ body {
   50% { transform: translateY(-8px); }
 }
 
+@keyframes skeletonShimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
 .anim-fade-in { animation: fadeIn 1.2s ease-out both; }
 .anim-rise-in { animation: riseIn 1.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
 .anim-fade-up { animation: fadeUp 0.9s cubic-bezier(0.22, 1, 0.36, 1) both; }
@@ -158,6 +163,16 @@ body {
 .marquee-fast { animation: marqueeScroll 12s linear infinite; will-change: transform; }
 .anim-pulse-glow { animation: pulseGlow 4s ease-in-out infinite; }
 .anim-float-drift { animation: floatDrift 5s ease-in-out infinite; }
+.skeleton-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.03) 0%,
+    rgba(235, 210, 216, 0.14) 50%,
+    rgba(255, 255, 255, 0.03) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.6s ease-in-out infinite;
+}
 
 @media (prefers-reduced-motion: reduce) {
   html {

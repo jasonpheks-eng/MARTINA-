@@ -21,6 +21,7 @@ import {
   type ThemeColors,
 } from '../studioFormat';
 import { resolvePostPillar } from './PillarIcons';
+import { JournalSectionSkeleton, SkeletonImage } from './Skeleton';
 
 interface ArticleBodyRendererProps {
   content: string;
@@ -202,11 +203,11 @@ function ArticleCoverImage({
       className="w-full h-full overflow-hidden"
       style={{ backgroundColor: styled.containerBg }}
     >
-      <img
+      <SkeletonImage
         src={src}
         alt={alt}
         referrerPolicy="no-referrer"
-        onError={() => setHasError(true)}
+        onImageError={() => setHasError(true)}
         className={`${className} ${styled.fitClass} ${styled.roundedClass}`}
         style={{
           ...(styled.imgStyle as React.CSSProperties),
@@ -300,6 +301,7 @@ interface JournalSectionProps {
   themeColors: ThemeColors;
   selectedPost: BlogPost | null;
   onSelectPost: (post: BlogPost | null) => void;
+  isLoading?: boolean;
 }
 
 export function JournalSection({
@@ -308,6 +310,7 @@ export function JournalSection({
   themeColors,
   selectedPost,
   onSelectPost,
+  isLoading = false,
 }: JournalSectionProps) {
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const [readProgress, setReadProgress] = useState(0);
@@ -564,6 +567,10 @@ export function JournalSection({
         }}
       >
         <div className="max-w-6xl mx-auto">
+          {isLoading ? (
+            <JournalSectionSkeleton themeColors={themeColors} />
+          ) : (
+            <>
           {/* Header + Category Filter Controls */}
           <div
             className={`mb-8 sm:mb-14 space-y-6 transition-all duration-700 ease-out ${
@@ -907,6 +914,8 @@ export function JournalSection({
               )}
             </div>
           )}
+            </>
+          )}
         </div>
       </section>
 
@@ -1140,12 +1149,12 @@ export function JournalSection({
                                 : `${themeColors.cream}20`,
                             }}
                           >
-                            <img
+                            <SkeletonImage
                               src={imgUrl}
                               alt={`${selectedPost.title} plate ${pIdx + 1}`}
                               className="w-full h-full object-contain"
                             />
-                            <span className="absolute bottom-2 left-2 px-2 py-0.5 bg-black/75 text-[10px] font-bold uppercase tracking-wider text-[#ebd2d8]">
+                            <span className="absolute bottom-2 left-2 z-10 px-2 py-0.5 bg-black/75 text-[10px] font-bold uppercase tracking-wider text-[#ebd2d8]">
                               Photo {String(pIdx + 1).padStart(2, '0')}
                             </span>
                           </button>

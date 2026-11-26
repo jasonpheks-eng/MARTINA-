@@ -107,6 +107,13 @@ import {
 } from './components/PillarIcons';
 import { BackgroundRemoverModal } from './components/BackgroundRemoverModal';
 import { ImageStyleControls } from './components/ImageStyleControls';
+import {
+  GallerySectionSkeleton,
+  SkeletonBox,
+  SkeletonImage,
+  UltraCollectionSkeleton,
+  WellnessSectionSkeleton,
+} from './components/Skeleton';
 
 const LOCAL_FORMAT_STORAGE_KEY = 'hot_core_studio_format_v1';
 
@@ -172,6 +179,9 @@ export default function App() {
 
   // Active App Configuration (Hydrated from localStorage fallback / DEFAULT_STUDIO_FORMAT, then synced from Firebase)
   const [initialCache] = useState<Partial<StudioFormatSnapshot>>(() => readStoredFormat());
+  const [isCloudHydrating, setIsCloudHydrating] = useState<boolean>(
+    () => Object.keys(initialCache).length === 0
+  );
   const [heroConfig, setHeroConfig] = useState<HeroConfig>(
     () => migrateHeroConfig(initialCache.heroConfig)
   );
@@ -436,6 +446,17 @@ export default function App() {
 
   // Firebase Real-time Synchronization Listeners (live across all devices, falling back cleanly to code defaults if DB is empty)
   useEffect(() => {
+    const settledStreams = new Set<string>();
+    const markStreamSettled = (streamName: string) => {
+      settledStreams.add(streamName);
+      if (settledStreams.size >= 5) {
+        setIsCloudHydrating(false);
+      }
+    };
+    const hydrationTimeout = window.setTimeout(() => {
+      setIsCloudHydrating(false);
+    }, 1000);
+
     // 1. Studio Media Slots Listener (/studioMedia/{slotId})
     const unsubMedia = onSnapshot(
       collection(db, 'studioMedia'),
@@ -473,14 +494,19 @@ export default function App() {
           blogPosts: resolvedBlog,
           galleryItems: resolvedGallery,
         });
+        markStreamSettled('media');
       },
-      (err) => console.warn('Firebase studioMedia subscription notice:', err)
+      (err) => {
+        console.warn('Firebase studioMedia subscription notice:', err);
+        markStreamSettled('media');
+      }
     );
 
     // 2. Config Settings Listener (/config/settings)
     const unsubConfig = onSnapshot(
       doc(db, 'config', 'settings'),
       (snapshot) => {
+        markStreamSettled('config');
         if (!snapshot.exists()) return;
         const data = snapshot.data();
         rawConfigSettingsRef.current = data as Record<string, unknown>;
@@ -519,13 +545,17 @@ export default function App() {
           writeStoredFormat(cachePatch);
         }
       },
-      (err) => console.warn('Firebase config subscription notice:', err)
+      (err) => {
+        console.warn('Firebase config subscription notice:', err);
+        markStreamSettled('config');
+      }
     );
 
     // 3. Blog Posts Listener (/blogPosts)
     const unsubBlog = onSnapshot(
       collection(db, 'blogPosts'),
       (snapshot) => {
+        markStreamSettled('blog');
         if (snapshot.empty) return;
         const rawItems = snapshot.docs.map((docItem) => docItem.data() as BlogPost);
         rawItems.sort((a, b) => a.id - b.id);
@@ -536,13 +566,17 @@ export default function App() {
         setBlogPosts(resolvedPosts);
         writeStoredFormat({ blogPosts: resolvedPosts });
       },
-      (err) => console.warn('Firebase blogPosts subscription notice:', err)
+      (err) => {
+        console.warn('Firebase blogPosts subscription notice:', err);
+        markStreamSettled('blog');
+      }
     );
 
     // 4. Gallery Items Listener (/galleryItems)
     const unsubGallery = onSnapshot(
       collection(db, 'galleryItems'),
       (snapshot) => {
+        markStreamSettled('gallery');
         if (snapshot.empty) return;
         const rawItems = snapshot.docs.map((docItem) => docItem.data() as GalleryItem);
         rawItems.sort((a, b) => a.id - b.id);
@@ -553,13 +587,17 @@ export default function App() {
         setGalleryItems(resolvedItems);
         writeStoredFormat({ galleryItems: resolvedItems });
       },
-      (err) => console.warn('Firebase galleryItems subscription notice:', err)
+      (err) => {
+        console.warn('Firebase galleryItems subscription notice:', err);
+        markStreamSettled('gallery');
+      }
     );
 
     // 5. Ultra Products Listener (/ultraProducts)
     const unsubProducts = onSnapshot(
       collection(db, 'ultraProducts'),
       (snapshot) => {
+        markStreamSettled('products');
         if (snapshot.empty) return;
         const rawItems = snapshot.docs.map((docItem) => docItem.data() as UltraProduct);
         rawItems.sort((a, b) => a.id - b.id);
@@ -570,10 +608,14 @@ export default function App() {
         setUltraProducts(items);
         writeStoredFormat({ ultraProducts: items });
       },
-      (err) => console.warn('Firebase ultraProducts subscription notice:', err)
+      (err) => {
+        console.warn('Firebase ultraProducts subscription notice:', err);
+        markStreamSettled('products');
+      }
     );
 
     return () => {
+      window.clearTimeout(hydrationTimeout);
       unsubMedia();
       unsubConfig();
       unsubBlog();
@@ -861,9 +903,10 @@ export default function App() {
               className="absolute inset-0 h-full w-full overflow-hidden"
               style={{ backgroundColor: bgStyled.containerBg }}
             >
-              <img
+              <SkeletonImage
                 src={heroConfig.bgImage}
                 alt=""
+                wrapperClassName="relative h-full w-full overflow-hidden"
                 className={`anim-fade-in h-full w-full ${bgStyled.fitClass} ${bgStyled.roundedClass}`}
                 style={bgStyled.imgStyle as React.CSSProperties}
               />
@@ -892,10 +935,11 @@ export default function App() {
         {heroConfig.portraitImage?.trim() && (() => {
           const pStyled = getImageStyleProps(heroConfig.portraitImageStyle, themeColors);
           return (
-            <img
+            <SkeletonImage
               src={heroConfig.portraitImage}
               alt="Portrait"
-              className={`anim-rise-in pointer-events-none absolute inset-0 z-20 h-full w-full object-top sm:object-center ${pStyled.fitClass}`}
+              wrapperClassName="pointer-events-none absolute inset-0 z-20 h-full w-full"
+              className={`anim-rise-in h-full w-full object-top sm:object-center ${pStyled.fitClass}`}
               style={{ animationDelay: '300ms', ...(pStyled.imgStyle as React.CSSProperties) }}
             />
           );
@@ -1077,121 +1121,134 @@ export default function App() {
           className="px-4 sm:px-6 lg:px-16 py-14 sm:py-28 border-t relative overflow-hidden transition-colors duration-500"
           style={{ backgroundColor: themeColors.wellnessBg, color: '#ffffff', borderColor: `${themeColors.cream}15` }}
         >
-          <div className="max-w-6xl mx-auto text-center mb-6 sm:mb-12 relative z-10">
-            <span className="text-[10px] sm:text-xs uppercase tracking-[0.3em] font-semibold mb-2 sm:mb-3 block" style={{ color: themeColors.wellnessIcon }}>
-              {sectionCopy.wellnessKicker}
-            </span>
-            <h2 className="text-3xl sm:text-6xl font-extrabold uppercase tracking-tight text-white mb-2.5 sm:mb-4">
-              {sectionCopy.wellnessTitle}
-            </h2>
-            <p className="text-xs sm:text-sm max-w-xl mx-auto leading-relaxed font-light text-white/80">
-              {sectionCopy.wellnessSubtitle}
-            </p>
-          </div>
+          {isCloudHydrating ? (
+            <WellnessSectionSkeleton themeColors={themeColors} />
+          ) : (
+            <>
+              <div className="max-w-6xl mx-auto text-center mb-6 sm:mb-12 relative z-10">
+                <span className="text-[10px] sm:text-xs uppercase tracking-[0.3em] font-semibold mb-2 sm:mb-3 block" style={{ color: themeColors.wellnessIcon }}>
+                  {sectionCopy.wellnessKicker}
+                </span>
+                <h2 className="text-3xl sm:text-6xl font-extrabold uppercase tracking-tight text-white mb-2.5 sm:mb-4">
+                  {sectionCopy.wellnessTitle}
+                </h2>
+                <p className="text-xs sm:text-sm max-w-xl mx-auto leading-relaxed font-light text-white/80">
+                  {sectionCopy.wellnessSubtitle}
+                </p>
+              </div>
 
-          <div className="canvas-root max-w-4xl mx-auto grid grid-cols-2 sm:flex sm:flex-col items-center justify-center gap-x-4 gap-y-7 sm:gap-10 py-4 sm:py-8 relative z-10">
-            {WELLNESS_PILLARS.map((node, index) => {
-              const IconComponent = getPillarIconComponent(node.defaultIcon);
-              const hasLinkedBlog = Boolean(findLinkedPostForPillar(blogPosts, node));
-              return (
-                <div
-                  key={node.id}
-                  onClick={() => setSelectedNode(node)}
-                  data-linked-blog={hasLinkedBlog ? 'true' : 'false'}
-                  className={`shape-container ${node.floatClass} transition-transform duration-300 hover:scale-110 cursor-pointer ${
-                    index === WELLNESS_PILLARS.length - 1 ? 'col-span-2 sm:col-span-1' : ''
-                  }`}
-                  style={{ animationDelay: node.delay }}
-                >
-                  <IconComponent
-                    className="wellness-icon w-11 h-11 sm:w-20 sm:h-20"
-                    style={{
-                      color: themeColors.wellnessIcon,
-                    }}
-                  />
-                  <span className="label text-[11px] sm:text-sm" style={{ color: '#ffffff' }}>
-                    {node.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+              <div className="canvas-root max-w-4xl mx-auto grid grid-cols-2 sm:flex sm:flex-col items-center justify-center gap-x-4 gap-y-7 sm:gap-10 py-4 sm:py-8 relative z-10">
+                {WELLNESS_PILLARS.map((node, index) => {
+                  const IconComponent = getPillarIconComponent(node.defaultIcon);
+                  const hasLinkedBlog = Boolean(findLinkedPostForPillar(blogPosts, node));
+                  return (
+                    <div
+                      key={node.id}
+                      onClick={() => setSelectedNode(node)}
+                      data-linked-blog={hasLinkedBlog ? 'true' : 'false'}
+                      className={`shape-container ${node.floatClass} transition-transform duration-300 hover:scale-110 cursor-pointer ${
+                        index === WELLNESS_PILLARS.length - 1 ? 'col-span-2 sm:col-span-1' : ''
+                      }`}
+                      style={{ animationDelay: node.delay }}
+                    >
+                      <IconComponent
+                        className="wellness-icon w-11 h-11 sm:w-20 sm:h-20"
+                        style={{
+                          color: themeColors.wellnessIcon,
+                        }}
+                      />
+                      <span className="label text-[11px] sm:text-sm" style={{ color: '#ffffff' }}>
+                        {node.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
 
-          <div className="text-center mt-6 sm:mt-12 text-[9px] sm:text-[10px] uppercase tracking-[0.28em] sm:tracking-[0.4em] opacity-60" style={{ color: themeColors.wellnessIcon }}>
-            {WELLNESS_PILLARS.some((node) => Boolean(findLinkedPostForPillar(blogPosts, node)))
-              ? 'Holistic Wellness Flow • Tap Icon to Explore Meaning & Blog'
-              : 'Holistic Wellness Flow • Tap Icon to Explore Meaning'}
-          </div>
+              <div className="text-center mt-6 sm:mt-12 text-[9px] sm:text-[10px] uppercase tracking-[0.28em] sm:tracking-[0.4em] opacity-60" style={{ color: themeColors.wellnessIcon }}>
+                {WELLNESS_PILLARS.some((node) => Boolean(findLinkedPostForPillar(blogPosts, node)))
+                  ? 'Holistic Wellness Flow • Tap Icon to Explore Meaning & Blog'
+                  : 'Holistic Wellness Flow • Tap Icon to Explore Meaning'}
+              </div>
+            </>
+          )}
         </section>
 
         {/* Picture Gallery Section */}
         <section id="gallery" className="px-4 sm:px-6 lg:px-16 py-14 sm:py-28 border-t" style={{ backgroundColor: themeColors.wine, color: themeColors.cream, borderColor: `${themeColors.cream}10` }}>
-          <div className="max-w-7xl mx-auto mb-7 sm:mb-12 text-center">
-            <h2 className="text-3xl sm:text-6xl lg:text-7xl font-extrabold uppercase tracking-tight" style={{ color: themeColors.cream }}>
-              {sectionCopy.galleryTitle}
-            </h2>
+          {isCloudHydrating ? (
+            <GallerySectionSkeleton themeColors={themeColors} galleryFilter={galleryFilter} />
+          ) : (
+            <>
+              <div className="max-w-7xl mx-auto mb-7 sm:mb-12 text-center">
+                <h2 className="text-3xl sm:text-6xl lg:text-7xl font-extrabold uppercase tracking-tight" style={{ color: themeColors.cream }}>
+                  {sectionCopy.galleryTitle}
+                </h2>
 
-            {/* Gallery controls removed from public view — managed exclusively in Admin Studio */}
-          </div>
+                {/* Gallery controls removed from public view — managed exclusively in Admin Studio */}
+              </div>
 
-          <div className={`max-w-7xl mx-auto grid ${galleryFilter === 'compact' ? 'gap-2.5 sm:gap-4 grid-cols-3 sm:grid-cols-3 md:grid-cols-6 auto-rows-[110px] sm:auto-rows-[180px]' : galleryFilter === 'large' ? 'gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 auto-rows-[220px] sm:auto-rows-[420px]' : 'gap-3 sm:gap-6 grid-cols-2 md:grid-cols-4 auto-rows-[155px] sm:auto-rows-[240px] md:auto-rows-[300px]'}`}>
-            {galleryItems.map((item) => {
-              let posClass = 'items-start justify-start text-left';
-              if (item.textPosition === 'top-right') posClass = 'items-end justify-start text-right';
-              if (item.textPosition === 'bottom-left') posClass = 'items-start justify-end text-left';
-              if (item.textPosition === 'bottom-right') posClass = 'items-end justify-end text-right';
-              if (item.textPosition === 'top-center') posClass = 'items-start justify-center text-center';
-              if (item.textPosition === 'bottom-center') posClass = 'items-end justify-center text-center';
+              <div className={`max-w-7xl mx-auto grid ${galleryFilter === 'compact' ? 'gap-2.5 sm:gap-4 grid-cols-3 sm:grid-cols-3 md:grid-cols-6 auto-rows-[110px] sm:auto-rows-[180px]' : galleryFilter === 'large' ? 'gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 auto-rows-[220px] sm:auto-rows-[420px]' : 'gap-3 sm:gap-6 grid-cols-2 md:grid-cols-4 auto-rows-[155px] sm:auto-rows-[240px] md:auto-rows-[300px]'}`}>
+                {galleryItems.map((item) => {
+                  let posClass = 'items-start justify-start text-left';
+                  if (item.textPosition === 'top-right') posClass = 'items-end justify-start text-right';
+                  if (item.textPosition === 'bottom-left') posClass = 'items-start justify-end text-left';
+                  if (item.textPosition === 'bottom-right') posClass = 'items-end justify-end text-right';
+                  if (item.textPosition === 'top-center') posClass = 'items-start justify-center text-center';
+                  if (item.textPosition === 'bottom-center') posClass = 'items-end justify-center text-center';
 
-              const itemSize = galleryFilter === 'compact' || galleryFilter === 'large' ? 'col-span-1 row-span-1' : item.size;
-              const tileStyled = getImageStyleProps(item.imageStyle, themeColors);
+                  const itemSize = galleryFilter === 'compact' || galleryFilter === 'large' ? 'col-span-1 row-span-1' : item.size;
+                  const tileStyled = getImageStyleProps(item.imageStyle, themeColors);
 
-              return (
-                <div key={item.id} className={`relative rounded-none overflow-hidden border group shadow-2xl flex flex-col p-3 sm:p-6 md:p-8 ${itemSize}`} style={{ backgroundColor: tileStyled.containerBg || '#000', borderColor: `${themeColors.cream}15` }}>
-                  {item.image?.trim() && (
-                    <img
-                      src={item.image}
-                      alt={item.title}
-                      className={`absolute inset-0 w-full h-full filter brightness-90 group-hover:scale-105 transition-transform duration-700 ease-out ${
-                        item.image.includes('image_706072f8') ? 'object-[center_74%]' : ''
-                      } ${tileStyled.fitClass} ${tileStyled.roundedClass}`}
-                      style={tileStyled.imgStyle as React.CSSProperties}
-                    />
-                  )}
-                  <div className="absolute inset-0 pointer-events-none" style={{ background: `linear-gradient(to top, ${themeColors.wine}ee 0%, transparent 70%)` }} />
+                  return (
+                    <div key={item.id} className={`relative rounded-none overflow-hidden border group shadow-2xl flex flex-col p-3 sm:p-6 md:p-8 ${itemSize}`} style={{ backgroundColor: tileStyled.containerBg || '#000', borderColor: `${themeColors.cream}15` }}>
+                      {item.image?.trim() && (
+                        <SkeletonImage
+                          src={item.image}
+                          alt={item.title}
+                          wrapperClassName="absolute inset-0 w-full h-full overflow-hidden"
+                          className={`w-full h-full filter brightness-90 group-hover:scale-105 transition-transform duration-700 ease-out ${
+                            item.image.includes('image_706072f8') ? 'object-[center_74%]' : ''
+                          } ${tileStyled.fitClass} ${tileStyled.roundedClass}`}
+                          style={tileStyled.imgStyle as React.CSSProperties}
+                        />
+                      )}
+                      <div className="absolute inset-0 pointer-events-none" style={{ background: `linear-gradient(to top, ${themeColors.wine}ee 0%, transparent 70%)` }} />
 
-                  <div className={`relative z-10 h-full flex flex-col ${posClass} w-full overflow-hidden`}>
-                    {textAnimStyle === 'marquee' ? (
-                      <div className="w-full overflow-hidden whitespace-nowrap py-0.5 sm:py-1">
-                        <div className="marquee-fast flex w-max gap-4 sm:gap-8 font-extrabold uppercase tracking-tight text-sm sm:text-2xl md:text-3xl text-cream drop-shadow-lg">
-                          <span>{item.title}</span>
-                          <span>&mdash;</span>
-                          <span>{item.title}</span>
-                          <span>&mdash;</span>
-                        </div>
+                      <div className={`relative z-10 h-full flex flex-col ${posClass} w-full overflow-hidden`}>
+                        {textAnimStyle === 'marquee' ? (
+                          <div className="w-full overflow-hidden whitespace-nowrap py-0.5 sm:py-1">
+                            <div className="marquee-fast flex w-max gap-4 sm:gap-8 font-extrabold uppercase tracking-tight text-sm sm:text-2xl md:text-3xl text-cream drop-shadow-lg">
+                              <span>{item.title}</span>
+                              <span>&mdash;</span>
+                              <span>{item.title}</span>
+                              <span>&mdash;</span>
+                            </div>
+                          </div>
+                        ) : textAnimStyle === 'pulse' ? (
+                          <h3 className="font-extrabold uppercase tracking-tight leading-none drop-shadow-lg anim-pulse-glow text-base sm:text-2xl md:text-4xl" style={{ color: themeColors.cream }}>
+                            {item.title}
+                          </h3>
+                        ) : textAnimStyle === 'float' ? (
+                          <h3 className="font-extrabold uppercase tracking-tight leading-none drop-shadow-lg anim-float-drift text-base sm:text-2xl md:text-4xl" style={{ color: themeColors.cream }}>
+                            {item.title}
+                          </h3>
+                        ) : textAnimStyle === 'fadeUp' ? (
+                          <h3 className="font-extrabold uppercase tracking-tight leading-none drop-shadow-lg anim-fade-up text-base sm:text-2xl md:text-4xl" style={{ color: themeColors.cream }}>
+                            {item.title}
+                          </h3>
+                        ) : (
+                          <h3 className="font-extrabold uppercase tracking-tight leading-none drop-shadow-lg text-base sm:text-2xl md:text-4xl" style={{ color: themeColors.cream }}>
+                            {item.title}
+                          </h3>
+                        )}
                       </div>
-                    ) : textAnimStyle === 'pulse' ? (
-                      <h3 className="font-extrabold uppercase tracking-tight leading-none drop-shadow-lg anim-pulse-glow text-base sm:text-2xl md:text-4xl" style={{ color: themeColors.cream }}>
-                        {item.title}
-                      </h3>
-                    ) : textAnimStyle === 'float' ? (
-                      <h3 className="font-extrabold uppercase tracking-tight leading-none drop-shadow-lg anim-float-drift text-base sm:text-2xl md:text-4xl" style={{ color: themeColors.cream }}>
-                        {item.title}
-                      </h3>
-                    ) : textAnimStyle === 'fadeUp' ? (
-                      <h3 className="font-extrabold uppercase tracking-tight leading-none drop-shadow-lg anim-fade-up text-base sm:text-2xl md:text-4xl" style={{ color: themeColors.cream }}>
-                        {item.title}
-                      </h3>
-                    ) : (
-                      <h3 className="font-extrabold uppercase tracking-tight leading-none drop-shadow-lg text-base sm:text-2xl md:text-4xl" style={{ color: themeColors.cream }}>
-                        {item.title}
-                      </h3>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </section>
 
         {/* Blog Post Section & Reader Modal */}
@@ -1201,6 +1258,7 @@ export default function App() {
           themeColors={themeColors}
           selectedPost={selectedPost}
           onSelectPost={setSelectedPost}
+          isLoading={isCloudHydrating}
         />
 
         {/* Ultra Collection */}
@@ -1209,7 +1267,10 @@ export default function App() {
           className="px-4 sm:px-6 lg:px-16 py-14 sm:py-28 border-t overflow-x-clip"
           style={{ backgroundColor: themeColors.wine, color: themeColors.cream, borderColor: `${themeColors.cream}10` }}
         >
-          <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6">
+          {isCloudHydrating ? (
+            <UltraCollectionSkeleton themeColors={themeColors} />
+          ) : (
+            <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
               <div>
                 <h2 className="text-3xl sm:text-6xl font-extrabold uppercase tracking-tight leading-none" style={{ color: themeColors.cream }}>
@@ -1361,7 +1422,7 @@ export default function App() {
                         }}
                       >
                         {product.image?.trim() && (
-                          <img
+                          <SkeletonImage
                             src={product.image}
                             alt={product.title}
                             className={`w-full h-full transition-transform duration-700 ease-out group-hover:scale-105 ${tileFitClass} ${prodStyled.roundedClass}`}
@@ -1441,6 +1502,7 @@ export default function App() {
               </div>
             )}
           </div>
+          )}
         </section>
 
         {/* Footer */}
@@ -1697,7 +1759,7 @@ export default function App() {
               >
                 <div className="relative h-72 sm:h-96 bg-black overflow-hidden border" style={{ borderColor: `${themeColors.cream}18` }}>
                   {activePhoto && (
-                    <img
+                    <SkeletonImage
                       src={activePhoto}
                       alt={`${selectedProduct.title} — photo ${safeIdx + 1}`}
                       className="w-full h-full object-contain"
@@ -1746,7 +1808,7 @@ export default function App() {
                             }`}
                             style={{ borderColor: isActive ? themeColors.blush : `${themeColors.cream}25` }}
                           >
-                            <img src={imgUrl} alt={`Upload ${idx + 1}`} className="w-full h-full object-cover" />
+                            <SkeletonImage src={imgUrl} alt={`Upload ${idx + 1}`} className="w-full h-full object-cover" />
                           </button>
                         );
                       })}
@@ -3388,7 +3450,19 @@ export default function App() {
                     </div>
 
                     {/* Diagnostic Summary Bar */}
-                    {diagnosticReport && (
+                    {isRunningDiagnostic && !diagnosticReport ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-white/10">
+                        {[0, 1, 2].map((skIdx) => (
+                          <div key={skIdx} className="p-3 rounded-xl bg-black/40 border border-white/10 flex items-center gap-3">
+                            <SkeletonBox className="w-5 h-5 rounded-full shrink-0" />
+                            <div className="flex-1 space-y-1.5">
+                              <SkeletonBox className="h-2.5 w-20" />
+                              <SkeletonBox className="h-3.5 w-28" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : diagnosticReport && (
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-white/10">
                         <div className="p-3 rounded-xl bg-black/40 border border-white/10 flex items-center gap-3">
                           <Server className={diagnosticReport.firestoreConnected ? 'text-[#25D366]' : 'text-red-400'} size={20} />

@@ -218,8 +218,9 @@ export interface StudioFormatSnapshot {
 export const BG_IMAGE_URL =
   'https://images.higgs.ai/?default=1&output=webp&url=https%3A%2F%2Fd8j0ntlcm91z4.cloudfront.net%2Fuser_38xzZboKViGWJOttwIXH07lWA1P%2Fhf_20260729_022513_486985a2-ac8c-4278-91a8-071dcd9fcaff.png&w=1280&q=85';
 
-export const PORTRAIT_IMAGE_URL =
-  '/assets/aistudio/Screenshot_2026-11-25_at_01.18.48_b4a6afd0.png';
+export const HERO_IMAGE_URL = '/assets/aistudio/IMG_2315_2_7e376714.jpg';
+
+export const PORTRAIT_IMAGE_URL = '';
 
 export const REFERENCE_IMAGE_PATH = '/public/assets/aistudio/LANDING_PAGE_IDEA_a310be9f.jpg';
 
@@ -248,16 +249,16 @@ export const DEFAULT_SECTION_COPY: SectionCopyConfig = {
 export const DEFAULT_STUDIO_FORMAT: StudioFormatSnapshot = {
   heroConfig: {
     logoImage: '',
-    logoText: 'Marcus',
+    logoText: 'ULTRA',
     logoSize: 40,
     logoOffsetX: 0,
     logoOffsetY: 0,
     logoBlendMode: 'normal',
     logoRounded: 'none',
     logoOpacity: 100,
-    bgImage: BG_IMAGE_URL,
+    bgImage: HERO_IMAGE_URL,
     portraitImage: PORTRAIT_IMAGE_URL,
-    marqueeText: 'Marcus — Bennet',
+    marqueeText: 'ULTRA',
     kicker: 'Private Studio & 1:1 Coaching',
     headlinePart1: 'Stronger. Sculpted.',
     headlineAccent: 'Personally',
@@ -355,7 +356,7 @@ export const DEFAULT_STUDIO_FORMAT: StudioFormatSnapshot = {
         '/assets/aistudio/1_9a57f70a.png',
         '/assets/aistudio/2_64ef2d00.png',
       ],
-      author: 'Marcus Bennet',
+      author: 'ULTRA',
       readTime: '1 min read',
       featured: true,
       status: 'published',
@@ -382,7 +383,7 @@ export const DEFAULT_STUDIO_FORMAT: StudioFormatSnapshot = {
       date: 'Nov 2026',
       category: 'Reformer Mechanics',
       image: workoutBlogImg,
-      author: 'Marcus Bennet',
+      author: 'ULTRA',
       readTime: '1 min read',
       featured: false,
       status: 'published',
@@ -423,7 +424,7 @@ Between afternoon sessions, a char-toasted wrap packed with crispy spiced chicke
         '/assets/aistudio/6_33d7af51.png',
         '/assets/aistudio/5_d1decef2.png',
       ],
-      author: 'Marcus Bennet',
+      author: 'ULTRA',
       readTime: '2 min read',
       featured: false,
       status: 'published',
@@ -450,7 +451,7 @@ Between afternoon sessions, a char-toasted wrap packed with crispy spiced chicke
       date: 'Oct 2026',
       category: 'Breath & Peace',
       image: peaceBlogImg,
-      author: 'Marcus Bennet',
+      author: 'ULTRA',
       readTime: '1 min read',
       featured: false,
       status: 'published',
@@ -477,7 +478,7 @@ Between afternoon sessions, a char-toasted wrap packed with crispy spiced chicke
       date: 'Oct 2026',
       category: 'Private Practice',
       image: loveBlogImg,
-      author: 'Marcus Bennet',
+      author: 'ULTRA',
       readTime: '1 min read',
       featured: false,
       status: 'published',
@@ -534,6 +535,13 @@ export const LEGACY_UNSOLD_PRODUCT_TITLES = new Set([
   'ULTRA Tongue Scraper Collection',
 ]);
 
+export function normalizeUltraProductPrice(price: number): number {
+  if (!Number.isFinite(price) || price <= 0) return 0;
+  const rounded = Math.round(price);
+  // Migrate legacy USD prices (e.g., 24, 26, 28) to MWK thousands (24000, 26000, 28000)
+  return rounded < 500 ? rounded * 1000 : rounded;
+}
+
 export function migrateUltraProducts(products: UltraProduct[] | undefined | null): UltraProduct[] {
   if (!products || products.length === 0) {
     return DEFAULT_STUDIO_FORMAT.ultraProducts;
@@ -550,7 +558,7 @@ export function migrateUltraProducts(products: UltraProduct[] | undefined | null
   const isLegacySingleScraper =
     activeProducts.length === 1 &&
     (activeProducts[0].id === 7 || /tongue\s*scraper/i.test(activeProducts[0].title)) &&
-    activeProducts[0].price === 28;
+    activeProducts[0].price < 1000;
 
   if (isLegacySingleScraper) {
     return DEFAULT_STUDIO_FORMAT.ultraProducts;
@@ -560,8 +568,15 @@ export function migrateUltraProducts(products: UltraProduct[] | undefined | null
     const cleanExtras = (p.additionalImages || []).filter(
       (img) => !img.includes('image_8f6de05c.png') && !img.includes('3_8ce33e94.png')
     );
+    const normalizedPrice = normalizeUltraProductPrice(p.price);
+    const nextTitle =
+      p.title === 'ULTRA Stainless Tongue Scraper' && p.id === 7
+        ? DEFAULT_STUDIO_FORMAT.ultraProducts[0].title
+        : p.title;
     return {
       ...p,
+      title: nextTitle,
+      price: normalizedPrice,
       additionalImages: cleanExtras,
     };
   });
@@ -595,6 +610,7 @@ export function migrateLegacyBlogPosts(posts: BlogPost[] | undefined | null): Bl
   }
 
   return posts.map((post) => {
+    let nextPost = post;
     if (
       post.id === 1 &&
       typeof post.image === 'string' &&
@@ -606,8 +622,8 @@ export function migrateLegacyBlogPosts(posts: BlogPost[] | undefined | null): Bl
           (!Array.isArray(post.additionalImages) ||
             !post.additionalImages.includes('/assets/aistudio/1_9a57f70a.png'))))
     ) {
-      return {
-        ...post,
+      nextPost = {
+        ...nextPost,
         image: '/assets/aistudio/1_9a57f70a.png',
         additionalImages: [
           '/assets/aistudio/1_9a57f70a.png',
@@ -615,15 +631,22 @@ export function migrateLegacyBlogPosts(posts: BlogPost[] | undefined | null): Bl
         ],
         imageStyle: undefined,
       };
-    }
-    if (
+    } else if (
       post.id === 3 &&
       (post.title === 'Light Fuel, Clean Energy: Studio Plate Rituals' ||
         (typeof post.image === 'string' && post.image.includes('food_nourishment_blog')))
     ) {
-      return DEFAULT_STUDIO_FORMAT.blogPosts[2];
+      nextPost = DEFAULT_STUDIO_FORMAT.blogPosts[2];
     }
-    return post;
+
+    if (typeof nextPost.author === 'string' && /marcus/i.test(nextPost.author)) {
+      nextPost = {
+        ...nextPost,
+        author: nextPost.author.replace(/marcus(\s*[—\-]?\s*(bennet|holloway))?/gi, 'ULTRA'),
+      };
+    }
+
+    return nextPost;
   });
 }
 
@@ -668,6 +691,32 @@ export function migrateLegacyGalleryItems(
       imageStyle: replacement.imageStyle,
     };
   });
+}
+
+export function migrateHeroConfig(
+  hero: Partial<HeroConfig> | undefined | null
+): HeroConfig {
+  const rawBg = hero?.bgImage?.trim() || '';
+  const shouldReplaceBg =
+    !rawBg || rawBg === BG_IMAGE_URL || rawBg.includes('images.higgs.ai');
+
+  const rawPortrait = hero?.portraitImage?.trim() || '';
+  const shouldClearPortrait =
+    rawPortrait.includes('Screenshot_2026-11-25_at_01.18.48_b4a6afd0.png');
+
+  const merged: HeroConfig = {
+    ...DEFAULT_STUDIO_FORMAT.heroConfig,
+    ...(hero || {}),
+    bgImage: shouldReplaceBg ? HERO_IMAGE_URL : rawBg,
+    portraitImage: shouldClearPortrait ? '' : rawPortrait,
+  };
+  if (typeof merged.logoText === 'string' && /marcus/i.test(merged.logoText)) {
+    merged.logoText = 'ULTRA';
+  }
+  if (typeof merged.marqueeText === 'string' && /marcus/i.test(merged.marqueeText)) {
+    merged.marqueeText = 'ULTRA';
+  }
+  return merged;
 }
 
 export function migrateSectionCopy(
@@ -731,8 +780,50 @@ export function getImageStyleProps(
 }
 
 export function formatUltraPrice(price: number): string {
-  const safePrice = Number.isFinite(price) ? Math.max(0, Math.round(price)) : 0;
+  const safePrice = normalizeUltraProductPrice(price);
   return `MWK ${safePrice.toLocaleString('en-US')}`;
+}
+
+export function buildUltraProductWebUrl(product: UltraProduct): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const url = new URL(`${window.location.origin}${window.location.pathname}`);
+    url.searchParams.set('product', String(product.id));
+    url.hash = 'ultra-collection';
+    return url.toString();
+  } catch {
+    return `${window.location.origin}${window.location.pathname}?product=${encodeURIComponent(String(product.id))}#ultra-collection`;
+  }
+}
+
+export function buildUltraWhatsAppOrderUrl(params: {
+  product: UltraProduct;
+  quantity?: number;
+  customer?: { name?: string; contact?: string; note?: string };
+}): string {
+  const { product, quantity = 1, customer } = params;
+  const qty = Math.max(1, Math.round(quantity));
+  const unitPriceNum = normalizeUltraProductPrice(product.price);
+  const unitPrice = formatUltraPrice(unitPriceNum);
+  const totalPrice = formatUltraPrice(unitPriceNum * qty);
+  const productUrl = buildUltraProductWebUrl(product);
+
+  const lines = [
+    'Hello ULTRA! I would like to order:',
+    `• Product: *${product.title}*`,
+    ...(qty > 1
+      ? [`• Quantity: ${qty}`, `• Unit Price: ${unitPrice}`, `• *Total: ${totalPrice}*`]
+      : [`• Price: *${unitPrice}*`]),
+    ...(productUrl ? [`• Product Link: ${productUrl}`] : []),
+  ];
+
+  if (customer?.name?.trim()) lines.push(`• Name: ${customer.name.trim()}`);
+  if (customer?.contact?.trim()) lines.push(`• Contact: ${customer.contact.trim()}`);
+  if (customer?.note?.trim()) lines.push(`• Note: ${customer.note.trim()}`);
+
+  lines.push('Please share availability and payment/delivery details.');
+
+  return `https://wa.me/265994248379?text=${encodeURIComponent(lines.join('\n'))}`;
 }
 
 export function calculateReadTime(text?: string, fallbackExcerpt?: string): string {

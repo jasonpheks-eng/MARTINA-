@@ -126,7 +126,7 @@ Explain the core studio technique, breath cue, or reformer adjustment here.
       date: 'Nov 2026',
       category: 'Vitality & Growth',
       image: REFERENCE_IMAGE_PATH,
-      author: 'Marcus Bennet',
+      author: 'ULTRA',
       readTime: '2 min read',
       featured: false,
       status: 'published',
@@ -248,20 +248,7 @@ Explain the core studio technique, breath cue, or reformer adjustment here.
         </div>
 
         {showHeaderSettings && (
-          <div className="pt-4 border-t border-white/10 grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[10px] uppercase font-bold text-white/60 mb-1">
-                Journal Eyebrow / Kicker
-              </label>
-              <input
-                type="text"
-                value={draftSectionCopy.blogKicker}
-                onChange={(e) =>
-                  setDraftSectionCopy({ ...draftSectionCopy, blogKicker: e.target.value })
-                }
-                className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/15 text-xs text-white"
-              />
-            </div>
+          <div className="pt-4 border-t border-white/10">
             <div>
               <label className="block text-[10px] uppercase font-bold text-white/60 mb-1">
                 Journal Main Title
@@ -273,19 +260,6 @@ Explain the core studio technique, breath cue, or reformer adjustment here.
                   setDraftSectionCopy({ ...draftSectionCopy, blogTitle: e.target.value })
                 }
                 className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/15 text-xs text-white font-bold"
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block text-[10px] uppercase font-bold text-white/60 mb-1">
-                Journal Intro Description
-              </label>
-              <textarea
-                rows={2}
-                value={draftSectionCopy.blogSubtitle}
-                onChange={(e) =>
-                  setDraftSectionCopy({ ...draftSectionCopy, blogSubtitle: e.target.value })
-                }
-                className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/15 text-xs text-white"
               />
             </div>
           </div>
@@ -562,7 +536,7 @@ Explain the core studio technique, breath cue, or reformer adjustment here.
                       <input
                         type="text"
                         value={activePost.author || ''}
-                        placeholder="Marcus Bennet"
+                        placeholder="ULTRA"
                         onChange={(e) => updateActivePost({ author: e.target.value })}
                         className="w-full px-3 py-2 rounded-lg bg-black/45 border border-white/15 text-xs text-white"
                       />
@@ -661,9 +635,32 @@ Explain the core studio technique, breath cue, or reformer adjustment here.
                         2. Select Icon You Chose to Elaborate
                       </label>
                       <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateActivePost({
+                              pillarId: '',
+                              pillarIcon: 'none',
+                              pillarMeaning: '',
+                            })
+                          }
+                          className={`p-2 rounded-lg border flex flex-col items-center justify-center gap-1 text-center transition-all cursor-pointer ${
+                            activePost.pillarIcon === 'none' ||
+                            (!activePost.pillarId && !activePost.pillarIcon)
+                              ? 'bg-red-500/20 text-red-200 border-red-400/50 shadow-md'
+                              : 'bg-black/40 text-white/60 border-white/10 hover:border-white/30 hover:text-white'
+                          }`}
+                          title="Hide icon on blog card and unlink from Wellness Journey"
+                        >
+                          <Minus size={16} />
+                          <span className="text-[10px] font-bold uppercase tracking-wider leading-none">
+                            No Icon
+                          </span>
+                        </button>
                         {SELECTABLE_BLOG_ICONS.map((iconOpt) => {
                           const IconComp = iconOpt.icon;
                           const isIconSelected =
+                            activePost.pillarIcon !== 'none' &&
                             (activePost.pillarIcon ||
                               getPillarMetaById(activePost.pillarId)?.defaultIcon) === iconOpt.name;
                           return (
@@ -987,7 +984,7 @@ Explain the core studio technique, breath cue, or reformer adjustment here.
                             Additional Story Photos ({(activePost.additionalImages || []).length}/10)
                           </span>
                           <span className="text-[10px] text-white/50">
-                            Appears in the horizontal photo gallery inside the article reader.
+                            Slides horizontally on card hover and appears in the photo gallery inside the article reader.
                           </span>
                         </div>
                         <label className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-[10px] font-bold uppercase text-white flex items-center gap-1 cursor-pointer shrink-0">
@@ -1117,24 +1114,6 @@ Explain the core studio technique, breath cue, or reformer adjustment here.
                         </div>
                       );
                     })()}
-                    <div
-                      className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.2em] font-semibold mb-2"
-                      style={{ color: draftThemeColors.blush }}
-                    >
-                      {activePost.featured && (
-                        <>
-                          <span>Featured Essay</span>
-                          <span>&middot;</span>
-                        </>
-                      )}
-                      <span>{activePost.category}</span>
-                      <span>&middot;</span>
-                      <span style={{ color: `${draftThemeColors.cream}aa` }}>{activePost.date}</span>
-                      <span>&middot;</span>
-                      <span style={{ color: `${draftThemeColors.cream}aa` }}>
-                        {activePost.readTime?.trim() || activeAutoReadTime}
-                      </span>
-                    </div>
                     <h4 className="text-xl font-extrabold uppercase tracking-tight mb-2 leading-snug">
                       {activePost.title}
                     </h4>
@@ -1192,7 +1171,7 @@ Explain the core studio technique, breath cue, or reformer adjustment here.
                       style={{ borderColor: `${draftThemeColors.cream}15` }}
                     >
                       <span style={{ color: `${draftThemeColors.cream}99` }}>
-                        {activePost.author?.trim() || 'Marcus Bennet'}
+                        {activePost.author?.trim() || 'ULTRA'}
                       </span>
                       <span
                         className="font-bold uppercase tracking-widest text-[11px]"
@@ -1223,7 +1202,7 @@ Explain the core studio technique, breath cue, or reformer adjustment here.
                     <span style={{ color: `${draftThemeColors.cream}aa` }}>{activePost.date}</span>
                     <span>&middot;</span>
                     <span style={{ color: `${draftThemeColors.cream}aa` }}>
-                      By {activePost.author?.trim() || 'Marcus Bennet'}
+                      By {activePost.author?.trim() || 'ULTRA'}
                     </span>
                     <span>&middot;</span>
                     <span style={{ color: `${draftThemeColors.cream}aa` }}>

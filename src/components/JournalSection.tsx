@@ -218,6 +218,82 @@ function ArticleCoverImage({
   );
 }
 
+interface JournalCardMediaProps {
+  photos: string[];
+  title: string;
+  themeColors: ThemeColors;
+  imageStyle?: ImageStyleConfig;
+  isHovered: boolean;
+}
+
+function JournalCardMedia({
+  photos,
+  title,
+  themeColors,
+  imageStyle,
+  isHovered,
+}: JournalCardMediaProps) {
+  const [hoverSlideIdx, setHoverSlideIdx] = useState(0);
+
+  useEffect(() => {
+    if (!isHovered || photos.length <= 1) {
+      setHoverSlideIdx(0);
+      return;
+    }
+
+    setHoverSlideIdx(1);
+    if (photos.length <= 2) return;
+
+    const timer = window.setInterval(() => {
+      setHoverSlideIdx((prev) => (prev + 1) % photos.length);
+    }, 2200);
+
+    return () => window.clearInterval(timer);
+  }, [isHovered, photos.length]);
+
+  if (photos.length <= 1) {
+    const singleSrc = photos[0];
+    const isUltraPortrait = singleSrc?.includes('1_9a57f70a');
+    const isMatchaLetterbox = singleSrc?.includes('2_64ef2d00');
+    return (
+      <ArticleCoverImage
+        src={singleSrc}
+        alt={title}
+        themeColors={themeColors}
+        imageStyle={imageStyle}
+        className={`w-full h-full filter brightness-95 transition-transform duration-700 ease-out ${
+          isUltraPortrait ? 'object-[center_28%]' : 'object-center'
+        } ${isMatchaLetterbox ? 'scale-[1.16] group-hover:scale-[1.2]' : 'group-hover:scale-105'}`}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="flex h-full w-full transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform"
+      style={{ transform: `translateX(-${hoverSlideIdx * 100}%)` }}
+    >
+      {photos.map((photoSrc, photoIdx) => {
+        const isUltraPortrait = photoSrc?.includes('1_9a57f70a');
+        const isMatchaLetterbox = photoSrc?.includes('2_64ef2d00');
+        return (
+          <div key={`${photoSrc}-${photoIdx}`} className="w-full h-full shrink-0 overflow-hidden">
+            <ArticleCoverImage
+              src={photoSrc}
+              alt={`${title}${photoIdx > 0 ? ` (${photoIdx + 1})` : ''}`}
+              themeColors={themeColors}
+              imageStyle={imageStyle}
+              className={`w-full h-full filter brightness-95 transition-transform duration-700 ease-out ${
+                isUltraPortrait ? 'object-[center_28%]' : 'object-center'
+              } ${isMatchaLetterbox ? 'scale-[1.16]' : ''}`}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 interface JournalSectionProps {
   blogPosts: BlogPost[];
   sectionCopy: SectionCopyConfig;
@@ -241,6 +317,7 @@ export function JournalSection({
   const [railScrollPct, setRailScrollPct] = useState(0);
   const [activeSlideIdx, setActiveSlideIdx] = useState(0);
   const [isDraggingRail, setIsDraggingRail] = useState(false);
+  const [hoveredPostId, setHoveredPostId] = useState<number | null>(null);
   const [activeReaderGalleryIdx, setActiveReaderGalleryIdx] = useState(0);
 
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -640,27 +717,28 @@ export function JournalSection({
                 }}
               >
                 {railPosts.map((post, idx) => {
-                  const computedReadTime =
-                    post.readTime?.trim() || calculateReadTime(post.content, post.excerpt);
                   const postPillar = resolvePostPillar(post);
                   const PostPillarIcon = postPillar.IconComponent;
                   const allPostPhotos = Array.from(
                     new Set([post.image, ...(post.additionalImages || [])].filter(Boolean))
                   );
-                  const isDualFeaturedCard = Boolean(post.featured && allPostPhotos.length >= 2);
 
                   return (
                     <article
                       key={post.id}
+                      onMouseEnter={() => {
+                        if (allPostPhotos.length > 1) {
+                          setHoveredPostId(post.id);
+                        }
+                      }}
+                      onMouseLeave={() => {
+                        setHoveredPostId((curr) => (curr === post.id ? null : curr));
+                      }}
                       onClick={() => {
                         if (dragStateRef.current.moved) return;
                         onSelectPost(post);
                       }}
-                      className={`group shrink-0 snap-start flex flex-col justify-between rounded-none border overflow-hidden p-4 sm:p-7 transition-all duration-700 ease-out shadow-2xl hover:-translate-y-1 hover:border-[#ebd2d8]/45 cursor-pointer ${
-                        isDualFeaturedCard
-                          ? 'w-[86vw] sm:w-[460px] lg:w-[540px]'
-                          : 'w-[82vw] sm:w-[400px] lg:w-[445px]'
-                      } ${
+                      className={`group shrink-0 snap-start flex flex-col justify-between rounded-none border overflow-hidden p-4 sm:p-7 transition-all duration-700 ease-out shadow-2xl hover:-translate-y-1 hover:border-[#ebd2d8]/45 cursor-pointer w-[82vw] sm:w-[400px] lg:w-[445px] ${
                         sectionInView
                           ? 'opacity-100 translate-y-0'
                           : 'opacity-0 translate-y-8'
@@ -675,38 +753,16 @@ export function JournalSection({
                     >
                       <div>
                         <div
-                          className={`relative h-56 sm:h-72 rounded-none overflow-hidden mb-4 sm:mb-6 bg-black border ${
-                            isDualFeaturedCard ? 'grid grid-cols-2 gap-0.5' : ''
-                          }`}
+                          className="relative h-56 sm:h-72 rounded-none overflow-hidden mb-4 sm:mb-6 bg-black border"
                           style={{ borderColor: `${themeColors.cream}15` }}
                         >
-                          {isDualFeaturedCard ? (
-                            allPostPhotos.slice(0, 2).map((photoSrc, photoIdx) => {
-                              const isMatchaLetterbox = photoSrc?.includes('2_64ef2d00');
-                              return (
-                                <ArticleCoverImage
-                                  key={photoSrc || photoIdx}
-                                  src={photoSrc}
-                                  alt={`${post.title}${photoIdx > 0 ? ` (${photoIdx + 1})` : ''}`}
-                                  themeColors={themeColors}
-                                  imageStyle={post.imageStyle}
-                                  className={`w-full h-full object-center filter brightness-95 transition-transform duration-700 ease-out ${
-                                    isMatchaLetterbox
-                                      ? 'scale-[1.16] group-hover:scale-[1.2]'
-                                      : 'group-hover:scale-[1.04]'
-                                  }`}
-                                />
-                              );
-                            })
-                          ) : (
-                            <ArticleCoverImage
-                              src={post.image}
-                              alt={post.title}
-                              themeColors={themeColors}
-                              imageStyle={post.imageStyle}
-                              className="w-full h-full object-[center_22%] filter brightness-95 group-hover:scale-105 transition-transform duration-700 ease-out"
-                            />
-                          )}
+                          <JournalCardMedia
+                            photos={allPostPhotos}
+                            title={post.title}
+                            themeColors={themeColors}
+                            imageStyle={post.imageStyle}
+                            isHovered={hoveredPostId === post.id}
+                          />
                           <div
                             className="absolute inset-0 pointer-events-none"
                             style={{
@@ -740,45 +796,6 @@ export function JournalSection({
                                 {allPostPhotos.length} Photos
                               </span>
                             </div>
-                          )}
-                          {!isDualFeaturedCard && allPostPhotos.length > 1 && (
-                            <div className="absolute bottom-3 right-3 z-10 flex items-center gap-1.5">
-                              {allPostPhotos.slice(0, 3).map((thumbUrl, tIdx) => (
-                                <div
-                                  key={tIdx}
-                                  className="w-9 h-9 border border-white/30 overflow-hidden bg-black shadow-lg"
-                                >
-                                  <img
-                                    src={thumbUrl}
-                                    alt=""
-                                    className="w-full h-full object-cover"
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-
-                        <div
-                          className="flex flex-wrap items-center gap-2 text-[10px] sm:text-xs uppercase tracking-[0.2em] font-semibold mb-2"
-                          style={{ color: themeColors.blush }}
-                        >
-                          <span>{post.category}</span>
-                          {post.date && (
-                            <>
-                              <span aria-hidden="true">&middot;</span>
-                              <span style={{ color: `${themeColors.cream}aa` }}>
-                                {post.date}
-                              </span>
-                            </>
-                          )}
-                          {idx > 0 && (
-                            <>
-                              <span aria-hidden="true">&middot;</span>
-                              <span style={{ color: `${themeColors.cream}aa` }}>
-                                {computedReadTime}
-                              </span>
-                            </>
                           )}
                         </div>
 
@@ -851,7 +868,7 @@ export function JournalSection({
                           className="text-[11px] sm:text-xs font-medium truncate"
                           style={{ color: `${themeColors.cream}99` }}
                         >
-                          {post.author?.trim() || 'Marcus Bennet'}
+                          {post.author?.trim() || 'ULTRA'}
                         </span>
                         <span
                           className="inline-flex items-center gap-2 text-[11px] sm:text-xs uppercase tracking-widest font-bold group-hover:translate-x-1 transition-transform whitespace-nowrap shrink-0"
@@ -1036,7 +1053,7 @@ export function JournalSection({
                   )}
                   <span aria-hidden="true">&middot;</span>
                   <span style={{ color: `${themeColors.cream}aa` }}>
-                    By {selectedPost.author?.trim() || 'Marcus Bennet'}
+                    By {selectedPost.author?.trim() || 'ULTRA'}
                   </span>
                 </div>
 

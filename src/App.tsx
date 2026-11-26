@@ -74,13 +74,16 @@ import {
   DEFAULT_SECTION_COPY,
   DEFAULT_STUDIO_FORMAT,
   WELLNESS_PILLARS,
+  buildUltraWhatsAppOrderUrl,
   formatUltraPrice,
   generateStudioFormatCode,
   getImageStyleProps,
+  migrateHeroConfig,
   migrateLegacyBlogPosts,
   migrateLegacyGalleryItems,
   migrateSectionCopy,
   migrateUltraProducts,
+  normalizeUltraProductPrice,
   resolveImageBgColor,
   BG_IMAGE_URL,
   REFERENCE_IMAGE_PATH,
@@ -97,7 +100,11 @@ import {
 } from './studioFormat';
 import { JournalSection } from './components/JournalSection';
 import { BlogAdminEditor } from './components/BlogAdminEditor';
-import { getPillarIconComponent, resolvePostPillar } from './components/PillarIcons';
+import {
+  findLinkedPostForPillar,
+  getPillarIconComponent,
+  resolvePostPillar,
+} from './components/PillarIcons';
 import { BackgroundRemoverModal } from './components/BackgroundRemoverModal';
 import { ImageStyleControls } from './components/ImageStyleControls';
 
@@ -165,13 +172,9 @@ export default function App() {
 
   // Active App Configuration (Hydrated from localStorage fallback / DEFAULT_STUDIO_FORMAT, then synced from Firebase)
   const [initialCache] = useState<Partial<StudioFormatSnapshot>>(() => readStoredFormat());
-  const [heroConfig, setHeroConfig] = useState<HeroConfig>({
-    ...DEFAULT_STUDIO_FORMAT.heroConfig,
-    ...(initialCache.heroConfig || {}),
-    portraitImage: initialCache.heroConfig?.portraitImage?.trim()
-      ? initialCache.heroConfig.portraitImage
-      : DEFAULT_STUDIO_FORMAT.heroConfig.portraitImage,
-  });
+  const [heroConfig, setHeroConfig] = useState<HeroConfig>(
+    () => migrateHeroConfig(initialCache.heroConfig)
+  );
   const [sectionCopy, setSectionCopy] = useState<SectionCopyConfig>(
     () => migrateSectionCopy(initialCache.sectionCopy)
   );
@@ -191,6 +194,18 @@ export default function App() {
   const [isProductCheckoutStep, setIsProductCheckoutStep] = useState(false);
   const [checkoutCustomer, setCheckoutCustomer] = useState({ name: '', contact: '', note: '' });
   const [isProductOrderConfirmed, setIsProductOrderConfirmed] = useState(false);
+  const handledInitialProductParamRef = useRef(false);
+
+  const closeProductModal = () => {
+    setSelectedProduct(null);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('product')) {
+        url.searchParams.delete('product');
+        window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+      }
+    }
+  };
 
   // Ultra Collection Horizontal Rail State & Handlers
   const ultraRailRef = useRef<HTMLDivElement | null>(null);
@@ -344,6 +359,7 @@ export default function App() {
 
   // Refs to keep raw media references & loaded /studioMedia slots synchronized regardless of snapshot order
   const rawHeroConfigRef = useRef<HeroConfig>(heroConfig);
+  const rawConfigSettingsRef = useRef<Record<string, unknown> | null>(null);
   const rawProductsRef = useRef<UltraProduct[]>(ultraProducts);
   const rawBlogPostsRef = useRef<BlogPost[]>(blogPosts);
   const rawGalleryItemsRef = useRef<GalleryItem[]>(galleryItems);
@@ -467,13 +483,11 @@ export default function App() {
       (snapshot) => {
         if (!snapshot.exists()) return;
         const data = snapshot.data();
+        rawConfigSettingsRef.current = data as Record<string, unknown>;
         const cachePatch: Partial<StudioFormatSnapshot> = {};
 
         if (data.heroConfig) {
-          const mergedRawHero: HeroConfig = {
-            ...DEFAULT_STUDIO_FORMAT.heroConfig,
-            ...data.heroConfig,
-          };
+          const mergedRawHero = migrateHeroConfig(data.heroConfig);
           rawHeroConfigRef.current = mergedRawHero;
           const resolvedHero = resolveHeroMediaFromMap(mergedRawHero, studioMediaMapRef.current);
           setHeroConfig(resolvedHero);
@@ -637,20 +651,23 @@ export default function App() {
         }
       }
 
-      // Persist everything to Firestore
-      const [configRes, blogRes, galleryRes, productsRes] = await Promise.all([
-        saveStudioConfigToFirebase({
+      // Persist changes sequentially, skipping unchanged images & documents to conserve Firestore write bandwidth
+      const existingMediaMap = studioMediaMapRef.current;
+      const configRes = await saveStudioConfigToFirebase(
+        {
           heroConfig: draftHeroConfig,
           sectionCopy: draftSectionCopy,
           themeColors: draftThemeColors,
           qualifierBullets: draftQualifierBullets,
           galleryFilter: draftGalleryFilter,
           textAnimStyle: draftTextAnimStyle,
-        }),
-        saveBlogPostsToFirebase(draftBlogPosts),
-        saveGalleryItemsToFirebase(draftGalleryItems),
-        saveUltraProductsToFirebase(draftUltraProducts),
-      ]);
+        },
+        existingMediaMap,
+        rawConfigSettingsRef.current
+      );
+      const blogRes = await saveBlogPostsToFirebase(draftBlogPosts, existingMediaMap);
+      const galleryRes = await saveGalleryItemsToFirebase(draftGalleryItems, existingMediaMap);
+      const productsRes = await saveUltraProductsToFirebase(draftUltraProducts, existingMediaMap);
 
       // Keep local studioMedia map & raw refs synchronized immediately so snapshots never flash or drop images
       studioMediaMapRef.current = {
@@ -661,6 +678,7 @@ export default function App() {
         ...productsRes.writtenMediaSlots,
       };
       rawHeroConfigRef.current = configRes.persistedHeroConfig;
+      rawConfigSettingsRef.current = configRes.persistedConfigBody;
       rawBlogPostsRef.current = blogRes.persistedPosts;
       rawGalleryItemsRef.current = galleryRes.persistedItems;
       rawProductsRef.current = productsRes.persistedProducts;
@@ -691,6 +709,7 @@ export default function App() {
       const message = specificTabName
         ? `Saved & synced ${specificTabName} to Firestore!`
         : 'All Admin Studio changes saved & synced to Firestore!';
+      showToast('success', message);
       setAuthErrorDetail(null);
       return true;
     } catch (err) {
@@ -715,7 +734,7 @@ export default function App() {
   }, [isDrawerOpen, isBookingOpen, isAdminOpen, selectedNode, selectedPost, selectedProduct]);
 
   useEffect(() => {
-    document.title = 'Marcus — Bennet & Hot Core Pilates';
+    document.title = 'ULTRA — Hot Core Pilates';
   }, []);
 
   useEffect(() => {
@@ -723,6 +742,21 @@ export default function App() {
       void handleRunDiagnostics();
     }
   }, [adminTab]);
+
+  useEffect(() => {
+    if (handledInitialProductParamRef.current || typeof window === 'undefined') return;
+    const productParam = new URLSearchParams(window.location.search).get('product');
+    if (!productParam) return;
+    const matched = ultraProducts.find((p) => String(p.id) === productParam);
+    if (!matched) return;
+    handledInitialProductParamRef.current = true;
+    setSelectedProduct(matched);
+    setActiveProductImageIdx(0);
+    setProductQty(1);
+    setIsProductCheckoutStep(false);
+    setIsProductOrderConfirmed(false);
+    document.getElementById('ultra-collection')?.scrollIntoView({ behavior: 'smooth' });
+  }, [ultraProducts]);
 
   const handleOpenBooking = (sessionName?: string) => {
     if (sessionName) {
@@ -759,7 +793,7 @@ export default function App() {
     if (!file) return;
 
     try {
-      const processedUrl = await processImageFileForUpload(file, 460000);
+      const processedUrl = await processImageFileForUpload(file, 320000);
       callback(processedUrl);
       showToast('success', 'Image added to draft! Click "Save & Apply Live" to publish.', 3200);
     } catch (err) {
@@ -779,7 +813,7 @@ export default function App() {
     try {
       const processedUrls: string[] = [];
       for (const file of files) {
-        const processed = await processImageFileForUpload(file, 460000);
+        const processed = await processImageFileForUpload(file, 320000);
         processedUrls.push(processed);
       }
       if (processedUrls.length > 0) {
@@ -816,7 +850,7 @@ export default function App() {
       )}
 
       {/* ========================================================================= */}
-      {/* SECTION 1: MARCUS BENNET PORTFOLIO HERO                                   */}
+      {/* SECTION 1: ULTRA PORTFOLIO HERO                                          */}
       {/* ========================================================================= */}
       <section className="relative h-[100dvh] w-full overflow-hidden bg-[#141414] font-hn text-cream select-none">
         {/* Background image */}
@@ -895,7 +929,7 @@ export default function App() {
                 }}
               />
             ) : (
-              <span>{heroConfig.logoText?.trim() || 'Marcus'}</span>
+              <span>{heroConfig.logoText?.trim() || 'ULTRA'}</span>
             )}
           </a>
 
@@ -933,15 +967,6 @@ export default function App() {
                 Collection
               </a>
             </nav>
-
-            <button
-              type="button"
-              onClick={() => handleOpenBooking('Book a Class')}
-              className="px-4 py-2 rounded-full text-[11px] font-bold uppercase tracking-[0.16em] transition-all cursor-pointer shadow-lg hover:scale-[1.02] whitespace-nowrap shrink-0"
-              style={{ backgroundColor: themeColors.cream, color: themeColors.wine }}
-            >
-              Book a Class
-            </button>
           </div>
 
           {/* Mobile Header Actions */}
@@ -1037,7 +1062,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="text-xs text-cream/40 font-hn">A homage to Marcus Holloway</div>
+            <div className="text-xs text-cream/40 font-hn">ULTRA — Hot Core Pilates</div>
           </div>
         </div>
       </section>
@@ -1067,10 +1092,12 @@ export default function App() {
           <div className="canvas-root max-w-4xl mx-auto grid grid-cols-2 sm:flex sm:flex-col items-center justify-center gap-x-4 gap-y-7 sm:gap-10 py-4 sm:py-8 relative z-10">
             {WELLNESS_PILLARS.map((node, index) => {
               const IconComponent = getPillarIconComponent(node.defaultIcon);
+              const hasLinkedBlog = Boolean(findLinkedPostForPillar(blogPosts, node));
               return (
                 <div
                   key={node.id}
                   onClick={() => setSelectedNode(node)}
+                  data-linked-blog={hasLinkedBlog ? 'true' : 'false'}
                   className={`shape-container ${node.floatClass} transition-transform duration-300 hover:scale-110 cursor-pointer ${
                     index === WELLNESS_PILLARS.length - 1 ? 'col-span-2 sm:col-span-1' : ''
                   }`}
@@ -1091,7 +1118,9 @@ export default function App() {
           </div>
 
           <div className="text-center mt-6 sm:mt-12 text-[9px] sm:text-[10px] uppercase tracking-[0.28em] sm:tracking-[0.4em] opacity-60" style={{ color: themeColors.wellnessIcon }}>
-            Holistic Wellness Flow &bull; Tap Icon to Explore Meaning &amp; Blog
+            {WELLNESS_PILLARS.some((node) => Boolean(findLinkedPostForPillar(blogPosts, node)))
+              ? 'Holistic Wellness Flow • Tap Icon to Explore Meaning & Blog'
+              : 'Holistic Wellness Flow • Tap Icon to Explore Meaning'}
           </div>
         </section>
 
@@ -1288,15 +1317,19 @@ export default function App() {
                   new Set([product.image, ...(product.additionalImages || [])].filter(Boolean))
                 );
                 const formattedPrice = formatUltraPrice(product.price);
-                const directWhatsAppUrl = `https://wa.me/265994248379?text=${encodeURIComponent(
-                  `Hello Hot Core Pilates! I would like to order:\n- *${product.title}* (${formattedPrice})\n• Description: ${product.description || 'Professional grade oral wellness tool'}\n• Price: ${formattedPrice}\nPlease share availability and payment/delivery details.`
-                )}`;
+                const directWhatsAppUrl = buildUltraWhatsAppOrderUrl({ product });
                 const openProductShowcase = () => {
                   setSelectedProduct(product);
                   setActiveProductImageIdx(0);
                   setProductQty(1);
                   setIsProductCheckoutStep(false);
                   setIsProductOrderConfirmed(false);
+                  if (typeof window !== 'undefined') {
+                    const url = new URL(window.location.href);
+                    url.searchParams.set('product', String(product.id));
+                    url.hash = 'ultra-collection';
+                    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+                  }
                 };
 
                 return (
@@ -1422,7 +1455,6 @@ export default function App() {
               <a href="#" className="hover:opacity-100 transition-opacity">Studio Location</a>
             </div>
             <div className="flex items-center justify-center md:justify-end gap-3">
-              <span>&copy; 2026 Hot Core Pilates. All rights reserved.</span>
               <button
                 type="button"
                 onClick={handleAdminAccessClick}
@@ -1513,22 +1545,14 @@ export default function App() {
       {/* WELLNESS PILLAR MODAL */}
       {selectedNode && (() => {
         const NodeIcon = getPillarIconComponent(selectedNode.defaultIcon);
-        const linkedPost =
-          blogPosts.find(
-            (p) => (p.status ?? 'published') === 'published' && p.pillarId === selectedNode.id
-          ) ||
-          blogPosts.find((p) => p.pillarId === selectedNode.id) ||
-          null;
+        const linkedPost = findLinkedPostForPillar(blogPosts, selectedNode);
         const linkedPillarInfo = linkedPost ? resolvePostPillar(linkedPost) : null;
         const LinkedBlogIcon = linkedPillarInfo ? linkedPillarInfo.IconComponent : NodeIcon;
 
         const handleViewPillarBlog = () => {
+          if (!linkedPost) return;
           setSelectedNode(null);
-          if (linkedPost) {
-            setSelectedPost(linkedPost);
-          } else {
-            document.getElementById('blog')?.scrollIntoView({ behavior: 'smooth' });
-          }
+          setSelectedPost(linkedPost);
         };
 
         return (
@@ -1560,61 +1584,59 @@ export default function App() {
                 ))}
               </div>
             </div>
-            <div
-              onClick={handleViewPillarBlog}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  handleViewPillarBlog();
-                }
-              }}
-              className="p-4 sm:p-5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/15 hover:border-[#d1dee7]/50 transition-all mb-5 sm:mb-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4 cursor-pointer"
-            >
-              <div className="flex items-start gap-3 sm:gap-4 min-w-0 flex-1">
-                {linkedPost?.image?.trim() && (
-                  <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden border border-white/20 shrink-0 bg-black/40">
-                    <img
-                      src={linkedPost.image}
-                      alt={linkedPost.title}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[#d1dee7] font-bold mb-1">
-                    <LinkedBlogIcon size={12} />
-                    <span>
-                      {linkedPost
-                        ? `Pillar ${selectedNode.number} Journal · ${linkedPillarInfo?.iconLabel || 'Studio'} Icon`
-                        : `Explore ${selectedNode.label} Articles`}
-                    </span>
-                  </span>
-                  <h4 className="text-sm sm:text-base font-bold text-white mb-1 leading-snug">
-                    {linkedPost ? linkedPost.title : `${selectedNode.meaning} — Studio Journal`}
-                  </h4>
-                  <p className="text-xs text-white/75 line-clamp-2">
-                    {linkedPost
-                      ? linkedPost.excerpt
-                      : `Read our journal stories illustrating the ${selectedNode.label} pillar and its benefits.`}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleViewPillarBlog();
+            {linkedPost && (
+              <div
+                onClick={handleViewPillarBlog}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleViewPillarBlog();
+                  }
                 }}
-                className="w-full sm:w-auto justify-center px-5 py-2.5 rounded-full bg-white text-[#637341] hover:bg-[#d1dee7] text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-lg shrink-0 whitespace-nowrap"
+                className="p-4 sm:p-5 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/15 hover:border-[#d1dee7]/50 transition-all mb-5 sm:mb-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4 cursor-pointer"
               >
-                <BookOpen size={15} />
-                <span>Click to View Blog</span>
-                <ArrowUpRight size={14} />
-              </button>
-            </div>
+                <div className="flex items-start gap-3 sm:gap-4 min-w-0 flex-1">
+                  {linkedPost.image?.trim() && (
+                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-xl overflow-hidden border border-white/20 shrink-0 bg-black/40">
+                      <img
+                        src={linkedPost.image}
+                        alt={linkedPost.title}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-[#d1dee7] font-bold mb-1">
+                      <LinkedBlogIcon size={12} />
+                      <span>
+                        Pillar {selectedNode.number} Journal · {linkedPillarInfo?.iconLabel || 'Studio'} Icon
+                      </span>
+                    </span>
+                    <h4 className="text-sm sm:text-base font-bold text-white mb-1 leading-snug">
+                      {linkedPost.title}
+                    </h4>
+                    <p className="text-xs text-white/75 line-clamp-2">
+                      {linkedPost.excerpt}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleViewPillarBlog();
+                  }}
+                  className="w-full sm:w-auto justify-center px-5 py-2.5 rounded-full bg-white text-[#637341] hover:bg-[#d1dee7] text-xs font-bold uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer shadow-lg shrink-0 whitespace-nowrap"
+                >
+                  <BookOpen size={15} />
+                  <span>Click to View Blog</span>
+                  <ArrowUpRight size={14} />
+                </button>
+              </div>
+            )}
             <div className="flex justify-end">
               <button onClick={() => setSelectedNode(null)} className="w-full sm:w-auto px-6 py-3 rounded-full bg-white/15 hover:bg-white/25 text-white text-xs font-bold uppercase tracking-widest cursor-pointer border border-white/20">
                 Close Pillar
@@ -1635,22 +1657,20 @@ export default function App() {
         );
         const safeIdx = Math.min(activeProductImageIdx, Math.max(0, gallery.length - 1));
         const activePhoto = gallery[safeIdx] || selectedProduct.image;
-        const orderTotal = selectedProduct.price * productQty;
-        const formattedUnitPrice = formatUltraPrice(selectedProduct.price);
+        const unitPriceValue = normalizeUltraProductPrice(selectedProduct.price);
+        const orderTotal = unitPriceValue * productQty;
+        const formattedUnitPrice = formatUltraPrice(unitPriceValue);
         const formattedOrderTotal = formatUltraPrice(orderTotal);
-        const whatsappText = encodeURIComponent(
-          `Hello Hot Core Pilates! I would like to order:\n- *${selectedProduct.title}* x${productQty} (${formattedUnitPrice} each)\n• Description: ${selectedProduct.description || 'Professional grade oral wellness tool'}\n• Price: ${formattedUnitPrice}\n*Total: ${formattedOrderTotal}*${
-            checkoutCustomer.name ? `\nName: ${checkoutCustomer.name}` : ''
-          }${checkoutCustomer.contact ? `\nContact: ${checkoutCustomer.contact}` : ''}${
-            checkoutCustomer.note ? `\nNote: ${checkoutCustomer.note}` : ''
-          }\nPlease share availability and payment/delivery details.`
-        );
-        const whatsappCheckoutUrl = `https://wa.me/265994248379?text=${whatsappText}`;
+        const whatsappCheckoutUrl = buildUltraWhatsAppOrderUrl({
+          product: selectedProduct,
+          quantity: productQty,
+          customer: checkoutCustomer,
+        });
 
         return (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-6 bg-black/85 backdrop-blur-md"
-            onClick={() => setSelectedProduct(null)}
+            onClick={closeProductModal}
           >
             <div
               onClick={(e) => e.stopPropagation()}
@@ -1663,7 +1683,7 @@ export default function App() {
             >
               <button
                 type="button"
-                onClick={() => setSelectedProduct(null)}
+                onClick={closeProductModal}
                 aria-label="Close product details"
                 className="absolute top-3.5 right-3.5 z-20 p-2 rounded-full bg-black/60 text-white hover:bg-black/80 border border-white/15 cursor-pointer"
               >
@@ -1872,7 +1892,7 @@ export default function App() {
                       {isProductOrderConfirmed && (
                         <div className="p-3 bg-[#25D366]/15 border border-[#25D366]/40 text-xs text-[#d6ffe4] flex items-start gap-2">
                           <CheckCircle2 size={16} className="text-[#25D366] shrink-0 mt-0.5" />
-                          <span>Order summary opened for WhatsApp checkout. Thank you for choosing Hot Core Studio!</span>
+                          <span>Order summary opened for WhatsApp checkout. Thank you for choosing ULTRA!</span>
                         </div>
                       )}
                     </div>
@@ -2088,13 +2108,12 @@ export default function App() {
                           />
                         ) : (
                           <span className="text-xs font-hn tracking-wide text-white/90 drop-shadow">
-                            {draftHeroConfig.logoText?.trim() || 'Marcus'}
+                            {draftHeroConfig.logoText?.trim() || 'ULTRA'}
                           </span>
                         )}
                       </div>
                       <div className="relative z-10 text-center px-4">
                         <div className="text-xl font-extrabold text-white tracking-widest uppercase drop-shadow-md">{draftHeroConfig.marqueeText}</div>
-                        <div className="text-xs text-[#ebd2d8] mt-1 font-serif italic">{draftHeroConfig.subheadline}</div>
                       </div>
                     </div>
                   </div>
@@ -2129,7 +2148,7 @@ export default function App() {
                           />
                         ) : (
                           <span className="text-[11px] text-white/40 font-hn truncate">
-                            {draftHeroConfig.logoText?.trim() || 'Marcus'}
+                            {draftHeroConfig.logoText?.trim() || 'ULTRA'}
                           </span>
                         )}
                       </div>
@@ -2150,8 +2169,8 @@ export default function App() {
                             <label className="block text-[10px] uppercase font-bold text-white/60 mb-1">Fallback Text (When No Image)</label>
                             <input
                               type="text"
-                              value={draftHeroConfig.logoText ?? 'Marcus'}
-                              placeholder="Marcus"
+                              value={draftHeroConfig.logoText ?? 'ULTRA'}
+                              placeholder="ULTRA"
                               onChange={(e) => setDraftHeroConfig({ ...draftHeroConfig, logoText: e.target.value })}
                               className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/15 text-xs text-white"
                             />
@@ -2501,16 +2520,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="p-4 rounded-2xl bg-[#141414] border border-white/10">
-                    <label className="block text-xs font-bold uppercase tracking-wider text-white mb-2">Private Reformer Subheadline</label>
-                    <textarea
-                      rows={2}
-                      value={draftHeroConfig.subheadline}
-                      onChange={(e) => setDraftHeroConfig({ ...draftHeroConfig, subheadline: e.target.value })}
-                      className="w-full px-4 py-3 rounded-xl bg-black/40 border border-white/15 text-sm text-white"
-                    />
-                  </div>
-
                   <div className="flex justify-end">
                     <button
                       onClick={() => handleSaveAndApply('Hero Visuals')}
@@ -2528,89 +2537,59 @@ export default function App() {
                   {/* Local Live Preview Banner */}
                   <div className="p-5 rounded-2xl bg-[#141414] border border-white/15 space-y-3">
                     <div className="flex items-center justify-between text-xs font-bold uppercase text-[#ebd2d8] tracking-wider">
-                      <span className="flex items-center gap-2"><Eye size={16} /> Local Live Preview (Headline &amp; Section Copy)</span>
+                      <span className="flex items-center gap-2"><Eye size={16} /> Local Live Preview (Marquee &amp; Section Headings)</span>
                     </div>
-                    <div className="p-6 rounded-xl bg-black/60 border border-white/10 text-center space-y-2">
-                      <div className="text-[#ebd2d8] text-[10px] font-bold uppercase tracking-[0.25em]">
-                        {draftHeroConfig.kicker || 'Private Studio & 1:1 Coaching'}
+                    <div className="p-5 rounded-xl bg-black/60 border border-white/10 space-y-4">
+                      <div className="text-center border-b border-white/10 pb-3">
+                        <span className="block text-[9px] uppercase tracking-[0.25em] text-white/45 mb-1">Hero Marquee</span>
+                        <div className="text-lg font-extrabold uppercase tracking-widest text-white truncate">
+                          {draftHeroConfig.marqueeText}
+                        </div>
                       </div>
-                      <h2 className="text-2xl font-extrabold uppercase text-white tracking-tight">
-                        {draftHeroConfig.headlinePart1}{' '}
-                        <span className="font-serif italic font-normal text-[#ebd2d8]">{draftHeroConfig.headlineAccent}</span>{' '}
-                        {draftHeroConfig.headlinePart2}
-                      </h2>
-                      <p className="text-xs text-white/70 max-w-lg mx-auto">{draftHeroConfig.subheadline}</p>
-                    </div>
-                  </div>
-
-                  {/* Hero Headline & Marquee */}
-                  <div className="p-4 rounded-2xl bg-[#141414] border border-white/10 space-y-4">
-                    <h5 className="text-xs font-bold uppercase tracking-wider text-[#ebd2d8]">Hero Headlines &amp; Kicker</h5>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-white/80 mb-1">Moving Text Marquee (Hero Name)</label>
-                        <input
-                          type="text"
-                          value={draftHeroConfig.marqueeText}
-                          onChange={(e) => setDraftHeroConfig({ ...draftHeroConfig, marqueeText: e.target.value })}
-                          className="w-full px-4 py-3 rounded-xl bg-black/40 border border-white/15 text-sm text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold uppercase tracking-wider text-white/80 mb-1">Hero Studio Kicker (Subtitle Tag)</label>
-                        <input
-                          type="text"
-                          value={draftHeroConfig.kicker || ''}
-                          onChange={(e) => setDraftHeroConfig({ ...draftHeroConfig, kicker: e.target.value })}
-                          className="w-full px-4 py-3 rounded-xl bg-black/40 border border-white/15 text-sm text-white"
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div>
-                        <label className="block text-xs font-bold uppercase text-white/80 mb-1">Headline Part 1</label>
-                        <input
-                          type="text"
-                          value={draftHeroConfig.headlinePart1}
-                          onChange={(e) => setDraftHeroConfig({ ...draftHeroConfig, headlinePart1: e.target.value })}
-                          className="w-full px-4 py-3 rounded-xl bg-black/40 border border-white/15 text-sm text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold uppercase text-white/80 mb-1">Accent Word (Italic)</label>
-                        <input
-                          type="text"
-                          value={draftHeroConfig.headlineAccent}
-                          onChange={(e) => setDraftHeroConfig({ ...draftHeroConfig, headlineAccent: e.target.value })}
-                          className="w-full px-4 py-3 rounded-xl bg-black/40 border border-white/15 text-sm text-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold uppercase text-white/80 mb-1">Headline Part 2</label>
-                        <input
-                          type="text"
-                          value={draftHeroConfig.headlinePart2}
-                          onChange={(e) => setDraftHeroConfig({ ...draftHeroConfig, headlinePart2: e.target.value })}
-                          className="w-full px-4 py-3 rounded-xl bg-black/40 border border-white/15 text-sm text-white"
-                        />
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-center">
+                        <div className="p-2.5 rounded-lg bg-white/5 border border-white/10">
+                          <span className="block text-[9px] uppercase tracking-[0.2em] text-[#ebd2d8]">{draftSectionCopy.wellnessKicker}</span>
+                          <span className="block text-xs font-extrabold uppercase text-white mt-0.5 truncate">{draftSectionCopy.wellnessTitle}</span>
+                          <span className="block text-[10px] text-white/60 mt-0.5 line-clamp-1">{draftSectionCopy.wellnessSubtitle}</span>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-white/5 border border-white/10 flex flex-col justify-center">
+                          <span className="block text-[9px] uppercase tracking-[0.2em] text-white/45">Gallery Heading</span>
+                          <span className="block text-xs font-extrabold uppercase text-white mt-0.5 truncate">{draftSectionCopy.galleryTitle}</span>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-white/5 border border-white/10 flex flex-col justify-center">
+                          <span className="block text-[9px] uppercase tracking-[0.2em] text-white/45">Journal Heading</span>
+                          <span className="block text-xs font-extrabold uppercase text-white mt-0.5 truncate">{draftSectionCopy.blogTitle}</span>
+                        </div>
+                        <div className="p-2.5 rounded-lg bg-white/5 border border-white/10 flex flex-col justify-center">
+                          <span className="block text-[9px] uppercase tracking-[0.2em] text-white/45">Collection Heading</span>
+                          <span className="block text-xs font-extrabold uppercase text-white mt-0.5 truncate">{draftSectionCopy.ultraTitle}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
 
-                  {/* All Section Titles, Subtitles & Intro Copy */}
+                  {/* Hero Marquee Text */}
+                  <div className="p-4 rounded-2xl bg-[#141414] border border-white/10 space-y-3">
+                    <h5 className="text-xs font-bold uppercase tracking-wider text-[#ebd2d8]">Hero Moving Marquee</h5>
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-white/80 mb-1">Moving Text Marquee (Hero Name)</label>
+                      <input
+                        type="text"
+                        value={draftHeroConfig.marqueeText}
+                        onChange={(e) => setDraftHeroConfig({ ...draftHeroConfig, marqueeText: e.target.value })}
+                        className="w-full px-4 py-3 rounded-xl bg-black/40 border border-white/15 text-sm text-white"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Live Section Titles & Copy */}
                   <div className="p-4 rounded-2xl bg-[#141414] border border-white/10 space-y-5">
                     <div>
-                      <h5 className="text-xs font-bold uppercase tracking-wider text-[#ebd2d8] mb-1">Section Titles, Subtitles &amp; Intro Text</h5>
-                      <p className="text-[11px] text-white/55">Edit the kicker eyebrow, main title, and subtitle/description for every landing page section.</p>
+                      <h5 className="text-xs font-bold uppercase tracking-wider text-[#ebd2d8] mb-1">Live Section Headings &amp; Intro Text</h5>
+                      <p className="text-[11px] text-white/55">Edit the exact section titles and Wellness Journey copy displayed on the live page.</p>
                     </div>
 
-                    {[
-                      {
-                        label: 'About / Qualifier Section',
-                        kickerKey: 'qualifierKicker' as const,
-                        titleKey: 'qualifierTitle' as const,
-                        subtitleKey: 'qualifierSubtitle' as const,
-                      },
+                    {([
                       {
                         label: 'Wellness Journey Section',
                         kickerKey: 'wellnessKicker' as const,
@@ -2619,35 +2598,36 @@ export default function App() {
                       },
                       {
                         label: 'Studio Gallery Section',
-                        kickerKey: 'galleryKicker' as const,
                         titleKey: 'galleryTitle' as const,
-                        subtitleKey: 'gallerySubtitle' as const,
                       },
                       {
                         label: 'Journal & Blog Section',
-                        kickerKey: 'blogKicker' as const,
                         titleKey: 'blogTitle' as const,
-                        subtitleKey: 'blogSubtitle' as const,
                       },
                       {
                         label: 'Ultra Collection Section',
-                        kickerKey: 'ultraKicker' as const,
                         titleKey: 'ultraTitle' as const,
-                        subtitleKey: 'ultraSubtitle' as const,
                       },
-                    ].map((section) => (
+                    ] as Array<{
+                      label: string;
+                      titleKey: 'wellnessTitle' | 'galleryTitle' | 'blogTitle' | 'ultraTitle';
+                      kickerKey?: 'wellnessKicker';
+                      subtitleKey?: 'wellnessSubtitle';
+                    }>).map((section) => (
                       <div key={section.titleKey} className="p-4 rounded-xl bg-black/35 border border-white/10 space-y-3">
                         <span className="block text-[11px] font-bold uppercase tracking-wider text-[#ebd2d8]">{section.label}</span>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          <div>
-                            <label className="block text-[10px] uppercase font-bold text-white/60 mb-1">Eyebrow / Subtitle Tag</label>
-                            <input
-                              type="text"
-                              value={draftSectionCopy[section.kickerKey]}
-                              onChange={(e) => setDraftSectionCopy({ ...draftSectionCopy, [section.kickerKey]: e.target.value })}
-                              className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/15 text-xs text-white"
-                            />
-                          </div>
+                        <div className={section.kickerKey ? 'grid grid-cols-1 sm:grid-cols-2 gap-3' : ''}>
+                          {section.kickerKey && (
+                            <div>
+                              <label className="block text-[10px] uppercase font-bold text-white/60 mb-1">Eyebrow / Subtitle Tag</label>
+                              <input
+                                type="text"
+                                value={draftSectionCopy[section.kickerKey]}
+                                onChange={(e) => setDraftSectionCopy({ ...draftSectionCopy, [section.kickerKey!]: e.target.value })}
+                                className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/15 text-xs text-white"
+                              />
+                            </div>
+                          )}
                           <div>
                             <label className="block text-[10px] uppercase font-bold text-white/60 mb-1">Section Title</label>
                             <input
@@ -2658,53 +2638,19 @@ export default function App() {
                             />
                           </div>
                         </div>
-                        <div>
-                          <label className="block text-[10px] uppercase font-bold text-white/60 mb-1">Section Description / Intro Text</label>
-                          <textarea
-                            rows={2}
-                            value={draftSectionCopy[section.subtitleKey]}
-                            onChange={(e) => setDraftSectionCopy({ ...draftSectionCopy, [section.subtitleKey]: e.target.value })}
-                            className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/15 text-xs text-white"
-                          />
-                        </div>
+                        {section.subtitleKey && (
+                          <div>
+                            <label className="block text-[10px] uppercase font-bold text-white/60 mb-1">Section Description / Intro Text</label>
+                            <textarea
+                              rows={2}
+                              value={draftSectionCopy[section.subtitleKey]}
+                              onChange={(e) => setDraftSectionCopy({ ...draftSectionCopy, [section.subtitleKey!]: e.target.value })}
+                              className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/15 text-xs text-white"
+                            />
+                          </div>
+                        )}
                       </div>
                     ))}
-                  </div>
-
-                  {/* Qualifier Bullets */}
-                  <div className="p-4 rounded-2xl bg-[#141414] border border-white/10 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold uppercase tracking-wider text-white">"Who is this for?" Target Audience Points</label>
-                      <button
-                        onClick={() => setDraftQualifierBullets([...draftQualifierBullets, 'New targeted assessment point'])}
-                        className="px-3 py-1.5 rounded-lg bg-white/10 text-xs text-white hover:bg-white/20 flex items-center gap-1 cursor-pointer"
-                      >
-                        <Plus size={14} /> <span>Add Bullet Point</span>
-                      </button>
-                    </div>
-
-                    <div className="space-y-2">
-                      {draftQualifierBullets.map((bullet, idx) => (
-                        <div key={idx} className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={bullet}
-                            onChange={(e) => {
-                              const updated = [...draftQualifierBullets];
-                              updated[idx] = e.target.value;
-                              setDraftQualifierBullets(updated);
-                            }}
-                            className="flex-1 px-4 py-2.5 rounded-xl bg-black/40 border border-white/15 text-xs text-white"
-                          />
-                          <button
-                            onClick={() => setDraftQualifierBullets(draftQualifierBullets.filter((_, i) => i !== idx))}
-                            className="p-2.5 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20 cursor-pointer"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
                   </div>
 
                   <div className="flex justify-end">
@@ -2749,7 +2695,6 @@ export default function App() {
                             { id: 'all', label: 'All Tiles' },
                             { id: 'compact', label: 'Compact Grid' },
                             { id: 'large', label: 'Featured View' },
-                            { id: 'minimal', label: 'Clean Tiles' },
                           ].map((option) => (
                             <button
                               key={option.id}
@@ -2995,9 +2940,13 @@ export default function App() {
                             </div>
                             <div className="grid grid-cols-2 gap-2">
                               <div>
-                                <label className="block text-[10px] uppercase font-bold text-white/60 mb-0.5">Price (MWK)</label>
+                                <label className="block text-[10px] uppercase font-bold text-white/60 mb-0.5">
+                                  Price (MWK) &middot; <span className="text-[#ebd2d8]">{formatUltraPrice(prod.price)}</span>
+                                </label>
                                 <input
                                   type="number"
+                                  min={0}
+                                  step={500}
                                   value={prod.price}
                                   onChange={(e) => {
                                     const val = parseFloat(e.target.value) || 0;
@@ -3735,11 +3684,11 @@ export default function App() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                       <div>
                         <label className="block text-xs font-bold uppercase mb-1 text-[#3d111e]/80">Full Name</label>
-                        <input type="text" required value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="Marcus Holloway" className="w-full px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-xl bg-white border border-[#3d111e]/15 text-sm" />
+                        <input type="text" required value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="ULTRA Client" className="w-full px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-xl bg-white border border-[#3d111e]/15 text-sm" />
                       </div>
                       <div>
                         <label className="block text-xs font-bold uppercase mb-1 text-[#3d111e]/80">Email Address</label>
-                        <input type="email" required value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="marcus@example.com" className="w-full px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-xl bg-white border border-[#3d111e]/15 text-sm" />
+                        <input type="email" required value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} placeholder="ultra@example.com" className="w-full px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-xl bg-white border border-[#3d111e]/15 text-sm" />
                       </div>
                     </div>
                     <div className="flex items-center gap-2.5 sm:gap-3 pt-2">

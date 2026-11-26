@@ -238,6 +238,20 @@ export function formatFirebaseError(err: unknown): FormattedFirebaseError {
     };
   }
 
+  if (
+    raw.includes('resource-exhausted') ||
+    raw.includes('maximum bandwidth for writes') ||
+    raw.includes('Quota exceeded')
+  ) {
+    return {
+      rawMessage: raw,
+      code: 'resource-exhausted',
+      title: 'Firestore Write Bandwidth Temporarily Exceeded',
+      description: 'Firestore has temporarily throttled write requests due to recent heavy write traffic.',
+      actionableStep: 'Please wait 30–60 seconds and try saving again. Unchanged items and images are skipped automatically.',
+    };
+  }
+
   return {
     rawMessage: raw,
     code: 'unknown_error',
@@ -369,6 +383,61 @@ function stripUndefinedDeep<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function canonicalizeValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => (item === undefined ? null : canonicalizeValue(item)));
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort()) {
+      const val = record[key];
+      if (val !== undefined) {
+        sorted[key] = canonicalizeValue(val);
+      }
+    }
+    return sorted;
+  }
+  return value;
+}
+
+function stableEqual(a: unknown, b: unknown): boolean {
+  return JSON.stringify(canonicalizeValue(a)) === JSON.stringify(canonicalizeValue(b));
+}
+
+function isTransientWriteError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const code = (err as { code?: unknown } | null)?.code;
+  const codeStr = typeof code === 'string' ? code : '';
+  return (
+    codeStr === 'resource-exhausted' ||
+    codeStr === 'unavailable' ||
+    codeStr === 'aborted' ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('maximum bandwidth for writes') ||
+    msg.includes('Too Many Requests')
+  );
+}
+
+async function withFirestoreWriteRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries = 4
+): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await operation();
+    } catch (err) {
+      if (!isTransientWriteError(err) || attempt >= maxRetries) {
+        throw err;
+      }
+      const delayMs = Math.min(16000, 1000 * 2 ** attempt) + Math.floor(Math.random() * 450);
+      attempt += 1;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 function clampString(val: string | undefined, maxLen: number, fallback = ''): string {
   const str = typeof val === 'string' ? val : fallback;
   return str.length > maxLen ? str.slice(0, maxLen) : str;
@@ -406,7 +475,7 @@ function detectCanvasTransparency(ctx: CanvasRenderingContext2D, width: number, 
  */
 export async function compressDataUrlForFirestore(
   dataUrl: string,
-  maxBytes = 460000
+  maxBytes = 320000
 ): Promise<string> {
   if (!dataUrl || !dataUrl.startsWith('data:image/')) {
     return dataUrl;
@@ -498,7 +567,7 @@ export async function compressDataUrlForFirestore(
   });
 }
 
-export async function processImageFileForUpload(file: File, maxBytes = 460000): Promise<string> {
+export async function processImageFileForUpload(file: File, maxBytes = 320000): Promise<string> {
   if (!file) {
     throw new Error('No file selected.');
   }
@@ -595,22 +664,35 @@ export function resolveGalleryMediaFromMap(
 async function saveHeroMediaSlot(
   slotId: string,
   rawValue: string | undefined,
-  writtenMediaSlots?: Record<string, string>
+  writtenMediaSlots?: Record<string, string>,
+  existingMediaMap?: Record<string, string>
 ): Promise<string> {
   const val = rawValue?.trim() || '';
   const slotPath = `studioMedia/${slotId}`;
 
   if (val.startsWith('data:image/')) {
-    const compressed = await compressDataUrlForFirestore(val, 680000);
+    const existingDataUrl = existingMediaMap?.[slotId];
+    if (existingDataUrl && existingDataUrl === val) {
+      return `${STUDIO_MEDIA_REF_PREFIX}${slotId}`;
+    }
+
+    const compressed = await compressDataUrlForFirestore(val, 380000);
     if (compressed.length > 880000) {
       throw new Error(`Uploaded image for ${slotId} is still too large after compression. Please choose a smaller file.`);
     }
+
+    if (existingDataUrl && existingDataUrl === compressed) {
+      return `${STUDIO_MEDIA_REF_PREFIX}${slotId}`;
+    }
+
     try {
-      await setDoc(doc(db, 'studioMedia', slotId), {
-        id: slotId,
-        dataUrl: compressed,
-        updatedAt: serverTimestamp(),
-      });
+      await withFirestoreWriteRetry(() =>
+        setDoc(doc(db, 'studioMedia', slotId), {
+          id: slotId,
+          dataUrl: compressed,
+          updatedAt: serverTimestamp(),
+        })
+      );
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, slotPath);
     }
@@ -620,10 +702,10 @@ async function saveHeroMediaSlot(
     return `${STUDIO_MEDIA_REF_PREFIX}${slotId}`;
   }
 
-  // Only clean up media slot if value was explicitly cleared/replaced with a non-slot URL
-  if (!val.startsWith(STUDIO_MEDIA_REF_PREFIX)) {
+  // Only clean up media slot if it actually exists in studioMedia and was replaced/cleared
+  if (!val.startsWith(STUDIO_MEDIA_REF_PREFIX) && existingMediaMap && slotId in existingMediaMap) {
     try {
-      await deleteDoc(doc(db, 'studioMedia', slotId));
+      await withFirestoreWriteRetry(() => deleteDoc(doc(db, 'studioMedia', slotId)));
     } catch {
       // Ignore cleanup failure when slot does not exist
     }
@@ -633,24 +715,44 @@ async function saveHeroMediaSlot(
 }
 
 // Persistence Helper Functions for App State
-export async function saveStudioConfigToFirebase(configData: {
-  heroConfig: HeroConfig;
-  sectionCopy: SectionCopyConfig;
-  themeColors: ThemeColors;
-  qualifierBullets: string[];
-  galleryFilter: GalleryFilterMode;
-  textAnimStyle: TextAnimStyle;
-}): Promise<{ persistedHeroConfig: HeroConfig; writtenMediaSlots: Record<string, string> }> {
+export async function saveStudioConfigToFirebase(
+  configData: {
+    heroConfig: HeroConfig;
+    sectionCopy: SectionCopyConfig;
+    themeColors: ThemeColors;
+    qualifierBullets: string[];
+    galleryFilter: GalleryFilterMode;
+    textAnimStyle: TextAnimStyle;
+  },
+  existingMediaMap?: Record<string, string>,
+  previousRawConfig?: Record<string, unknown> | null
+): Promise<{
+  persistedHeroConfig: HeroConfig;
+  persistedConfigBody: Record<string, unknown>;
+  writtenMediaSlots: Record<string, string>;
+}> {
   const path = 'config/settings';
   const writtenMediaSlots: Record<string, string> = {};
 
-  // Offload base64 Hero assets (logo, bg, portrait) into /studioMedia/{slotId}
-  // so /config/settings stays compact regardless of uploaded image sizes.
-  const [storedLogo, storedBg, storedPortrait] = await Promise.all([
-    saveHeroMediaSlot('hero_logo', configData.heroConfig.logoImage, writtenMediaSlots),
-    saveHeroMediaSlot('hero_bg', configData.heroConfig.bgImage, writtenMediaSlots),
-    saveHeroMediaSlot('hero_portrait', configData.heroConfig.portraitImage, writtenMediaSlots),
-  ]);
+  // Offload base64 Hero assets sequentially into /studioMedia/{slotId} only when changed
+  const storedLogo = await saveHeroMediaSlot(
+    'hero_logo',
+    configData.heroConfig.logoImage,
+    writtenMediaSlots,
+    existingMediaMap
+  );
+  const storedBg = await saveHeroMediaSlot(
+    'hero_bg',
+    configData.heroConfig.bgImage,
+    writtenMediaSlots,
+    existingMediaMap
+  );
+  const storedPortrait = await saveHeroMediaSlot(
+    'hero_portrait',
+    configData.heroConfig.portraitImage,
+    writtenMediaSlots,
+    existingMediaMap
+  );
 
   const sanitizedHeroConfig = stripUndefinedDeep({
     ...configData.heroConfig,
@@ -663,23 +765,39 @@ export async function saveStudioConfigToFirebase(configData: {
     .slice(0, 30)
     .map((b) => clampString(b, 300));
 
-  const payload = {
+  const persistedConfigBody = {
     heroConfig: sanitizedHeroConfig,
     sectionCopy: stripUndefinedDeep(configData.sectionCopy),
     themeColors: stripUndefinedDeep(configData.themeColors),
     qualifierBullets: sanitizedBullets,
     galleryFilter: configData.galleryFilter,
     textAnimStyle: configData.textAnimStyle,
-    updatedAt: serverTimestamp(),
   };
 
-  try {
-    await setDoc(doc(db, 'config', 'settings'), payload);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, path);
+  let previousComparable: Record<string, unknown> | null = null;
+  if (previousRawConfig) {
+    const { updatedAt: _ignoredUpdatedAt, ...rest } = previousRawConfig;
+    previousComparable = rest;
   }
 
-  return { persistedHeroConfig: sanitizedHeroConfig, writtenMediaSlots };
+  if (!previousComparable || !stableEqual(previousComparable, persistedConfigBody)) {
+    const payload = {
+      ...persistedConfigBody,
+      updatedAt: serverTimestamp(),
+    };
+
+    try {
+      await withFirestoreWriteRetry(() => setDoc(doc(db, 'config', 'settings'), payload));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  }
+
+  return {
+    persistedHeroConfig: sanitizedHeroConfig,
+    persistedConfigBody,
+    writtenMediaSlots,
+  };
 }
 
 async function syncCollectionById<T extends { id: number }>(collectionName: string, items: T[]) {
@@ -691,137 +809,171 @@ async function syncCollectionById<T extends { id: number }>(collectionName: stri
   }
 
   const nextIds = new Set(items.map((item) => String(item.id)));
+  const existingDataById = new Map<string, unknown>();
 
   for (const existingDoc of existingSnap.docs) {
     if (!nextIds.has(existingDoc.id)) {
       try {
-        await deleteDoc(doc(db, collectionName, existingDoc.id));
+        await withFirestoreWriteRetry(() => deleteDoc(doc(db, collectionName, existingDoc.id)));
       } catch (err) {
         handleFirestoreError(err, OperationType.DELETE, `${collectionName}/${existingDoc.id}`);
       }
+    } else {
+      existingDataById.set(existingDoc.id, existingDoc.data());
     }
   }
 
   for (const item of items) {
+    const docId = String(item.id);
     const cleanItem = stripUndefinedDeep(item);
+    const prevData = existingDataById.get(docId);
+    if (prevData !== undefined && stableEqual(prevData, cleanItem)) {
+      continue;
+    }
     try {
-      await setDoc(doc(db, collectionName, String(item.id)), cleanItem);
+      await withFirestoreWriteRetry(() => setDoc(doc(db, collectionName, docId), cleanItem));
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `${collectionName}/${String(item.id)}`);
+      handleFirestoreError(err, OperationType.WRITE, `${collectionName}/${docId}`);
     }
   }
 }
 
 export async function saveBlogPostsToFirebase(
-  posts: BlogPost[]
+  posts: BlogPost[],
+  existingMediaMap?: Record<string, string>
 ): Promise<{ persistedPosts: BlogPost[]; writtenMediaSlots: Record<string, string> }> {
   const writtenMediaSlots: Record<string, string> = {};
-  const prepared = await Promise.all(
-    posts.map(async (post) => {
-      const compressedImg = post.image?.startsWith('data:image/')
-        ? await saveHeroMediaSlot(`blog_${post.id}_main`, post.image, writtenMediaSlots)
-        : clampString(post.image, 880000);
-      const rawExtras = Array.isArray(post.additionalImages)
-        ? post.additionalImages.slice(0, 10)
-        : [];
-      const storedExtras = await Promise.all(
-        rawExtras.map((imgUrl, idx) =>
-          imgUrl?.startsWith('data:image/')
-            ? saveHeroMediaSlot(`blog_${post.id}_extra_${idx}`, imgUrl, writtenMediaSlots)
-            : Promise.resolve(clampString(imgUrl, 880000))
-        )
-      );
-      return {
-        id: post.id,
-        title: clampRequiredString(post.title, 240, 'Untitled Article'),
-        ...(post.subtitle !== undefined ? { subtitle: clampString(post.subtitle, 300) } : {}),
-        excerpt: clampString(post.excerpt, 1000, ''),
-        ...(post.content !== undefined ? { content: clampString(post.content, 50000) } : {}),
-        date: clampString(post.date, 64, ''),
-        category: clampRequiredString(post.category, 100, 'Studio Notes'),
-        image: compressedImg,
-        ...(storedExtras.length > 0 ? { additionalImages: storedExtras } : {}),
-        ...(post.imageStyle !== undefined ? { imageStyle: post.imageStyle } : {}),
-        ...(post.author !== undefined ? { author: clampString(post.author, 120) } : {}),
-        ...(post.readTime !== undefined ? { readTime: clampString(post.readTime, 40) } : {}),
-        ...(post.featured !== undefined ? { featured: Boolean(post.featured) } : {}),
-        ...(post.status !== undefined
-          ? { status: post.status === 'draft' ? ('draft' as const) : ('published' as const) }
-          : {}),
-        ...(post.takeaways !== undefined
-          ? { takeaways: post.takeaways.slice(0, 20).map((t) => clampString(t, 400)) }
-          : {}),
-        ...(post.pillarId !== undefined ? { pillarId: clampString(post.pillarId, 40) } : {}),
-        ...(post.pillarIcon !== undefined ? { pillarIcon: clampString(post.pillarIcon, 40) } : {}),
-        ...(post.pillarMeaning !== undefined
-          ? { pillarMeaning: clampString(post.pillarMeaning, 400) }
-          : {}),
-      };
-    })
-  );
+  const prepared: BlogPost[] = [];
+
+  for (const post of posts) {
+    const compressedImg = post.image?.startsWith('data:image/')
+      ? await saveHeroMediaSlot(`blog_${post.id}_main`, post.image, writtenMediaSlots, existingMediaMap)
+      : clampString(post.image, 880000);
+
+    const rawExtras = Array.isArray(post.additionalImages)
+      ? post.additionalImages.slice(0, 10)
+      : [];
+    const storedExtras: string[] = [];
+    for (let idx = 0; idx < rawExtras.length; idx += 1) {
+      const imgUrl = rawExtras[idx];
+      if (imgUrl?.startsWith('data:image/')) {
+        storedExtras.push(
+          await saveHeroMediaSlot(
+            `blog_${post.id}_extra_${idx}`,
+            imgUrl,
+            writtenMediaSlots,
+            existingMediaMap
+          )
+        );
+      } else {
+        storedExtras.push(clampString(imgUrl, 880000));
+      }
+    }
+
+    prepared.push({
+      id: post.id,
+      title: clampRequiredString(post.title, 240, 'Untitled Article'),
+      ...(post.subtitle !== undefined ? { subtitle: clampString(post.subtitle, 300) } : {}),
+      excerpt: clampString(post.excerpt, 1000, ''),
+      ...(post.content !== undefined ? { content: clampString(post.content, 50000) } : {}),
+      date: clampString(post.date, 64, ''),
+      category: clampRequiredString(post.category, 100, 'Studio Notes'),
+      image: compressedImg,
+      ...(storedExtras.length > 0 ? { additionalImages: storedExtras } : {}),
+      ...(post.imageStyle !== undefined ? { imageStyle: post.imageStyle } : {}),
+      ...(post.author !== undefined ? { author: clampString(post.author, 120) } : {}),
+      ...(post.readTime !== undefined ? { readTime: clampString(post.readTime, 40) } : {}),
+      ...(post.featured !== undefined ? { featured: Boolean(post.featured) } : {}),
+      ...(post.status !== undefined
+        ? { status: post.status === 'draft' ? ('draft' as const) : ('published' as const) }
+        : {}),
+      ...(post.takeaways !== undefined
+        ? { takeaways: post.takeaways.slice(0, 20).map((t) => clampString(t, 400)) }
+        : {}),
+      ...(post.pillarId !== undefined ? { pillarId: clampString(post.pillarId, 40) } : {}),
+      ...(post.pillarIcon !== undefined ? { pillarIcon: clampString(post.pillarIcon, 40) } : {}),
+      ...(post.pillarMeaning !== undefined
+        ? { pillarMeaning: clampString(post.pillarMeaning, 400) }
+        : {}),
+    });
+  }
+
   await syncCollectionById('blogPosts', prepared);
   return { persistedPosts: prepared, writtenMediaSlots };
 }
 
 export async function saveGalleryItemsToFirebase(
-  items: GalleryItem[]
+  items: GalleryItem[],
+  existingMediaMap?: Record<string, string>
 ): Promise<{ persistedItems: GalleryItem[]; writtenMediaSlots: Record<string, string> }> {
   const writtenMediaSlots: Record<string, string> = {};
-  const prepared = await Promise.all(
-    items.map(async (item) => {
-      const storedImg = item.image?.startsWith('data:image/')
-        ? await saveHeroMediaSlot(`gallery_${item.id}_main`, item.image, writtenMediaSlots)
-        : clampString(item.image, 880000);
-      return {
-        id: item.id,
-        title: clampRequiredString(item.title, 160, 'STUDIO TILE'),
-        subtitle: clampString(item.subtitle, 160, ''),
-        image: storedImg,
-        ...(item.imageStyle !== undefined ? { imageStyle: item.imageStyle } : {}),
-        size: clampString(item.size, 100, 'col-span-1 row-span-1'),
-        textPosition: clampString(item.textPosition, 40, 'bottom-left'),
-      };
-    })
-  );
+  const prepared: GalleryItem[] = [];
+
+  for (const item of items) {
+    const storedImg = item.image?.startsWith('data:image/')
+      ? await saveHeroMediaSlot(`gallery_${item.id}_main`, item.image, writtenMediaSlots, existingMediaMap)
+      : clampString(item.image, 880000);
+    prepared.push({
+      id: item.id,
+      title: clampRequiredString(item.title, 160, 'STUDIO TILE'),
+      subtitle: clampString(item.subtitle, 160, ''),
+      image: storedImg,
+      ...(item.imageStyle !== undefined ? { imageStyle: item.imageStyle } : {}),
+      size: clampString(item.size, 100, 'col-span-1 row-span-1'),
+      textPosition: clampString(item.textPosition, 40, 'bottom-left'),
+    });
+  }
+
   await syncCollectionById('galleryItems', prepared);
   return { persistedItems: prepared, writtenMediaSlots };
 }
 
 export async function saveUltraProductsToFirebase(
-  products: UltraProduct[]
+  products: UltraProduct[],
+  existingMediaMap?: Record<string, string>
 ): Promise<{ persistedProducts: UltraProduct[]; writtenMediaSlots: Record<string, string> }> {
   const writtenMediaSlots: Record<string, string> = {};
-  const prepared = await Promise.all(
-    products.map(async (prod) => {
-      const storedMain = prod.image?.startsWith('data:image/')
-        ? await saveHeroMediaSlot(`product_${prod.id}_main`, prod.image, writtenMediaSlots)
-        : clampString(prod.image, 880000);
+  const prepared: UltraProduct[] = [];
 
-      const rawExtras = Array.isArray(prod.additionalImages)
-        ? prod.additionalImages.slice(0, 10)
-        : [];
-      const storedExtras = await Promise.all(
-        rawExtras.map((imgUrl, idx) =>
-          imgUrl?.startsWith('data:image/')
-            ? saveHeroMediaSlot(`product_${prod.id}_extra_${idx}`, imgUrl, writtenMediaSlots)
-            : Promise.resolve(clampString(imgUrl, 880000))
-        )
-      );
+  for (const prod of products) {
+    const storedMain = prod.image?.startsWith('data:image/')
+      ? await saveHeroMediaSlot(`product_${prod.id}_main`, prod.image, writtenMediaSlots, existingMediaMap)
+      : clampString(prod.image, 880000);
 
-      return {
-        id: prod.id,
-        title: clampRequiredString(prod.title, 160, 'Studio Product'),
-        price: Number.isFinite(prod.price) ? Math.max(0, Math.min(100000, prod.price)) : 0,
-        image: storedMain,
-        ...(storedExtras.length > 0 ? { additionalImages: storedExtras } : {}),
-        ...(prod.imageStyle !== undefined ? { imageStyle: prod.imageStyle } : {}),
-        category: clampString(prod.category, 80, 'Studio Gear'),
-        ...(prod.description !== undefined
-          ? { description: clampString(prod.description, 1000) }
-          : {}),
-      };
-    })
-  );
+    const rawExtras = Array.isArray(prod.additionalImages)
+      ? prod.additionalImages.slice(0, 10)
+      : [];
+    const storedExtras: string[] = [];
+    for (let idx = 0; idx < rawExtras.length; idx += 1) {
+      const imgUrl = rawExtras[idx];
+      if (imgUrl?.startsWith('data:image/')) {
+        storedExtras.push(
+          await saveHeroMediaSlot(
+            `product_${prod.id}_extra_${idx}`,
+            imgUrl,
+            writtenMediaSlots,
+            existingMediaMap
+          )
+        );
+      } else {
+        storedExtras.push(clampString(imgUrl, 880000));
+      }
+    }
+
+    prepared.push({
+      id: prod.id,
+      title: clampRequiredString(prod.title, 160, 'Studio Product'),
+      price: Number.isFinite(prod.price) ? Math.max(0, Math.min(100000, prod.price)) : 0,
+      image: storedMain,
+      ...(storedExtras.length > 0 ? { additionalImages: storedExtras } : {}),
+      ...(prod.imageStyle !== undefined ? { imageStyle: prod.imageStyle } : {}),
+      category: clampString(prod.category, 80, 'Studio Gear'),
+      ...(prod.description !== undefined
+        ? { description: clampString(prod.description, 1000) }
+        : {}),
+    });
+  }
+
   await syncCollectionById('ultraProducts', prepared);
   return { persistedProducts: prepared, writtenMediaSlots };
 }
@@ -836,14 +988,16 @@ export async function saveBookingToFirebase(bookingData: {
   const path = 'consultationBookings';
   try {
     const bookingsCol = collection(db, path);
-    await addDoc(bookingsCol, {
-      name: clampRequiredString(bookingData.name, 120, 'Guest'),
-      email: clampRequiredString(bookingData.email, 200, 'guest@example.com'),
-      session: clampRequiredString(bookingData.session, 160, 'Private Session'),
-      date: clampString(bookingData.date, 40),
-      time: clampString(bookingData.time, 40),
-      createdAt: serverTimestamp(),
-    });
+    await withFirestoreWriteRetry(() =>
+      addDoc(bookingsCol, {
+        name: clampRequiredString(bookingData.name, 120, 'Guest'),
+        email: clampRequiredString(bookingData.email, 200, 'guest@example.com'),
+        session: clampRequiredString(bookingData.session, 160, 'Private Session'),
+        date: clampString(bookingData.date, 40),
+        time: clampString(bookingData.time, 40),
+        createdAt: serverTimestamp(),
+      })
+    );
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, path);
   }

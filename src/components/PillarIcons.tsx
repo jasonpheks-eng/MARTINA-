@@ -76,13 +76,16 @@ export interface ResolvedPostPillar {
 
 export function resolvePostPillar(post: BlogPost): ResolvedPostPillar {
   const pillar = getPillarMetaById(post.pillarId);
+  const isIconExplicitlyDisabled = post.pillarIcon === 'none';
+  const hasPillarOrIcon =
+    !isIconExplicitlyDisabled && Boolean(post.pillarId || post.pillarIcon);
+
   const resolvedIconName = (
-    post.pillarIcon ||
+    (!isIconExplicitlyDisabled && post.pillarIcon) ||
     pillar?.defaultIcon ||
     'Sprout'
   ) as PillarIconName;
   const iconOption = getIconOptionMeta(resolvedIconName);
-  const hasPillarOrIcon = Boolean(post.pillarId || post.pillarIcon || post.pillarMeaning?.trim());
 
   const pillarBadgeLabel = pillar
     ? `Pillar ${pillar.number} · ${pillar.label}`
@@ -102,6 +105,29 @@ export function resolvePostPillar(post: BlogPost): ResolvedPostPillar {
     meaningText,
     hasPillarOrIcon,
   };
+}
+
+export function findLinkedPostForPillar(
+  blogPosts: BlogPost[],
+  pillar: WellnessPillarMeta
+): BlogPost | null {
+  return (
+    blogPosts.find((post) => {
+      if ((post.status ?? 'published') !== 'published') return false;
+      const resolved = resolvePostPillar(post);
+      return (
+        resolved.hasPillarOrIcon &&
+        post.pillarId === pillar.id &&
+        resolved.iconName === pillar.defaultIcon
+      );
+    }) ||
+    blogPosts.find((post) => {
+      if ((post.status ?? 'published') !== 'published') return false;
+      const resolved = resolvePostPillar(post);
+      return resolved.hasPillarOrIcon && post.pillarId === pillar.id;
+    }) ||
+    null
+  );
 }
 
 export function renderPillarIcon(
